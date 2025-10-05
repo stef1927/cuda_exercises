@@ -1,0 +1,37 @@
+{
+	"name": "NVIDIA CUDA container",
+	//"image": "nvcr.io/nvidia/cuda:12.0.0-devel-ubuntu20.04",
+	"image": "nvcr.io/nvidia/nvhpc:25.5-devel-cuda12.9-ubuntu20.04",
+	"runArgs": [
+		"--gpus=all",
+		"--cap-add=SYS_ADMIN"
+	],
+	// add any additional mounts here, e.g. for checkpoints or data, other code dependencies, ssh agent config files, etc.
+	"mounts": [
+		"source=/tmp,target=/tmp,type=bind,consistency=cached,readOnly=false",
+		"source=/mnt/c/Users/salborghetti/Downloads/reports,target=/reports,type=bind,consistency=cached,readOnly=false"
+        
+	],
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	//"features": {},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Use 'postCreateCommand' to run commands after the container is created.
+	//"postCreateCommand": "",
+	// Configure tool-specific properties.
+	"customizations": {
+		"vscode": {
+			"extensions.verifySignature": false,
+			"extensions": [
+				"eamodio.gitlens",
+				"GitHub.copilot-chat",
+				"GitLab.gitlab-workflow"
+			]
+		}
+	},
+	"containerUser": "ubuntu",
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	"remoteUser": "ubuntu",
+	// Add any environment variables here that you want to be available in the container, e.g. SSH_AUTH_SOCK
+    "remoteEnv": {}
+}
