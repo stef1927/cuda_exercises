@@ -11,43 +11,44 @@
 
 #include "utils.h"
 
-enum class MatrixType { HOST, DEVICE };
+// Forward declaration of DeviceMatrix
+template <typename T> class DeviceMatrix;
 
-template <typename T> class Matrix {
+template <typename T> class HostMatrix {
 public:
-  explicit Matrix(int width, int height, MatrixType type)
-      : width(width), height(height), type(type) {
-    allocate(true);
+  explicit HostMatrix(int width, int height) : width(width), height(height) {
+    allocate();
   }
 
-  ~Matrix() { deallocate(); }
+  ~HostMatrix() { deallocate(); }
 
-  Matrix(const Matrix &other)
-      : width(other.width), height(other.height), type(other.type) {
-    allocate(true);
-    copy(other);
+  void close() { deallocate(); }
+
+  HostMatrix(const HostMatrix &other)
+      : width(other.width), height(other.height) {
+    allocate();
+    cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
+                         cudaMemcpyHostToHost));
   }
 
-  Matrix &operator=(const Matrix &other) {
+  HostMatrix &operator=(const HostMatrix &other) {
     if (this != &other) {
-      copy(other);
+      maybe_reallocate(other.width, other.height);
+      cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
+                           cudaMemcpyHostToHost));
     }
     return *this;
   }
 
-  Matrix(Matrix &&other)
-      : width(other.width), height(other.height), type(other.type),
-        data(other.data) {
+  HostMatrix(HostMatrix &&other)
+      : width(other.width), height(other.height), data(other.data) {
     other.data = nullptr;
     other.width = 0;
     other.height = 0;
   }
 
-  Matrix &operator=(Matrix &&other) {
+  HostMatrix &operator=(HostMatrix &&other) {
     if (this != &other) {
-      if (type != other.type) {
-        throw std::invalid_argument("Invalid matrix type");
-      }
       deallocate();
       width = other.width;
       height = other.height;
@@ -59,9 +60,30 @@ public:
     return *this;
   }
 
-  void set_value(T val, int row, int col) { data[row * width + col] = val; }
+  DeviceMatrix<T> to_device() const {
+    if (data == nullptr) {
+      throw std::runtime_error("Cannot copy from a moved-from HostMatrix");
+    }
+    T *device_data = nullptr;
+    cudaCheck(cudaMalloc((void **)&device_data, get_size() * sizeof(T)));
+    cudaCheck(cudaMemcpy(device_data, data, get_size() * sizeof(T),
+                         cudaMemcpyHostToDevice));
+    return DeviceMatrix<T>(width, width, height, device_data);
+  }
 
-  const T &get_value(int row, int col) const { return data[row * width + col]; }
+  void from_device(const DeviceMatrix<T> &other) {
+    if (other.data == nullptr) {
+      throw std::runtime_error("Cannot copy from a moved-from DeviceMatrix");
+    }
+    if (data == nullptr) {
+      throw std::runtime_error("Cannot copy to a moved-from HostMatrix");
+    }
+    if (width != other.width || height != other.height) {
+      throw std::runtime_error("Cannot copy matrices of different sizes");
+    }
+    cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
+                         cudaMemcpyDeviceToHost));
+  }
 
   int get_width() const { return width; }
   int get_height() const { return height; }
@@ -76,7 +98,7 @@ public:
     }
   }
 
-  bool verify(const Matrix &other, float tolerance = 0.1) const {
+  bool verify(const HostMatrix<T> &other, float tolerance = 0.1) const {
     for (int i = 0; i < get_size(); i++) {
       float a = data[i];
       float b = other.data[i];
@@ -92,69 +114,84 @@ public:
   }
 
 private:
-  void allocate(bool zero = false) {
-    if (type == MatrixType::HOST) {
-      cudaCheck(cudaMallocHost((void **)&data, get_size() * sizeof(T)));
-      if (zero) {
-        memset(data, 0, get_size() * sizeof(T));
-      }
-    } else if (type == MatrixType::DEVICE) {
-      cudaCheck(cudaMalloc((void **)&data, get_size() * sizeof(T)));
-      if (zero) {
-        cudaCheck(cudaMemset(data, 0, get_size() * sizeof(T)));
-      }
-    } else {
-      throw std::invalid_argument("Invalid matrix type");
-    }
+  void allocate() {
+    cudaCheck(cudaMallocHost((void **)&data, get_size() * sizeof(T)));
+    memset(data, 0, get_size() * sizeof(T));
   }
 
   void deallocate() {
-    if (type == MatrixType::HOST) {
+    if (data != nullptr) {
       cudaCheck(cudaFreeHost(data));
-    } else if (type == MatrixType::DEVICE) {
-      cudaCheck(cudaFree(data));
+      data = nullptr;
     }
   }
 
-  void maybe_reallocate(const Matrix &other) {
-    if (width != other.width || height != other.height) {
+  void maybe_reallocate(int other_width, int other_height) {
+    if (width != other_width || height != other_height) {
       deallocate();
-      width = other.width;
-      height = other.height;
-      allocate(false);
-    }
-  }
-
-  void copy(const Matrix &other) {
-    maybe_reallocate(other);
-    if (type == MatrixType::HOST) {
-      if (other.type == MatrixType::HOST) {
-        memcpy(data, other.data, get_size() * sizeof(T));
-      } else if (other.type == MatrixType::DEVICE) {
-        cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
-                             cudaMemcpyDeviceToHost));
-      } else {
-        throw std::invalid_argument("Invalid matrix type");
-      }
-    } else if (type == MatrixType::DEVICE) {
-      if (other.type == MatrixType::HOST) {
-        cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
-                             cudaMemcpyDeviceToHost));
-      } else if (other.type == MatrixType::DEVICE) {
-        cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
-                             cudaMemcpyDeviceToDevice));
-      } else {
-        throw std::invalid_argument("Invalid matrix type");
-      }
-    } else {
-      throw std::invalid_argument("Invalid matrix type");
+      width = other_width;
+      height = other_height;
+      allocate();
     }
   }
 
 private:
   int width;
   int height;
-  MatrixType type;
+  T *data;
+};
+
+template <typename T> class DeviceMatrix {
+public:
+  __host__ __device__ DeviceMatrix(int width, int stride, int height, T *data)
+      : width(width), stride(stride), height(height), data(data) {}
+
+  __host__ __device__ ~DeviceMatrix() = default;
+
+  // Copy operations are forbidden
+  __host__ __device__ DeviceMatrix(const DeviceMatrix &) = default;
+  __host__ __device__ DeviceMatrix &operator=(const DeviceMatrix &) = default;
+
+  __host__ __device__ DeviceMatrix(DeviceMatrix &&other) noexcept = default;
+  __host__ __device__ DeviceMatrix &
+  operator=(DeviceMatrix &&other) noexcept = default;
+
+  __host__ void close() {
+    if (data != nullptr) {
+      cudaCheck(cudaFree(data));
+      data = nullptr;
+    }
+  }
+
+  __device__ inline void set_value(T val, int row, int col) {
+    if (row >= 0 && row < height && col >= 0 && col < width) {
+      data[row * stride + col] = val;
+    }
+  }
+
+  __device__ inline const T &get_value(int row, int col) const {
+    if (row >= 0 && row < height && col >= 0 && col < width) {
+      return data[row * stride + col];
+    }
+    return 0;
+  }
+
+  __device__ inline DeviceMatrix<T> get_block(int row, int col,
+                                              int block_size) const {
+    if (row < 0 || col < 0 || row >= height || col >= width) {
+      return DeviceMatrix<T>(0, 0, 0, nullptr);
+    }
+    T *block_data = &data[row * block_size * stride + col * block_size];
+    int width = block_size <= width - col ? block_size : width - col;
+    int height = block_size <= height - row ? block_size : height - row;
+    DeviceMatrix<T> block(width, stride, height, block_data);
+    return block;
+  }
+
+public:
+  int width;
+  int stride;
+  int height;
   T *data;
 };
 
