@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "argparse.hpp"
 #include "matrix.h"
 #include "utils.h"
 
@@ -14,13 +15,22 @@ static std::default_random_engine generator(786);
 
 enum class KernelType { NAIVE, TILED };
 
-__global__ void matrixMulNaiveKernel(DeviceMatrix<bf16> A, DeviceMatrix<bf16> B,
-                                     DeviceMatrix<bf16> C) {
+struct Args {
+  int width;
+  int height;
+  int block_size;
+  int num_runs;
+  KernelType kernel_type;
+};
+
+template <typename T>
+__global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
+                                     DeviceMatrix<T> C) {
   const int row = blockIdx.x * blockDim.x + threadIdx.x;
   const int col = blockIdx.y * blockDim.y + threadIdx.y;
 
   if (row < C.height && col < C.width) {
-    bf16 sum = 0.0;
+    T sum = 0.0;
     for (int k = 0; k < A.width; ++k) {
       sum += A.get_value(row, k) * B.get_value(k, col);
     }
@@ -29,54 +39,56 @@ __global__ void matrixMulNaiveKernel(DeviceMatrix<bf16> A, DeviceMatrix<bf16> B,
   }
 }
 
-template <int BLOCKSIZE>
-__global__ void matrixMulTiledKernel(DeviceMatrix<bf16> A, DeviceMatrix<bf16> B,
-                                     DeviceMatrix<bf16> C) {
+template <typename T>
+__global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
+                                     DeviceMatrix<T> C, int block_size) {
 
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
   const int blockCol = blockIdx.x;
   const int col = threadIdx.x;
 
-  DeviceMatrix<bf16> Csub = C.get_block(blockRow, blockCol, BLOCKSIZE);
-  bf16 sum = 0.0;
-  for (int b = 0; b < (A.width / BLOCKSIZE); ++b) {
-    __shared__ bf16 As[BLOCKSIZE][BLOCKSIZE];
-    __shared__ bf16 Bs[BLOCKSIZE][BLOCKSIZE];
+  extern __shared__ T smem[];
+  T *As = &smem[0];
+  T *Bs = &smem[block_size * block_size];
 
-    DeviceMatrix<bf16> Asub = A.get_block(blockRow, b, BLOCKSIZE);
-    DeviceMatrix<bf16> Bsub = B.get_block(b, blockCol, BLOCKSIZE);
+  DeviceMatrix<T> Csub = C.get_block(blockRow, blockCol, block_size);
+  T sum = 0.0;
+  for (int b = 0; b < (A.width / block_size); ++b) {
+    DeviceMatrix<T> Asub = A.get_block(blockRow, b, block_size);
+    DeviceMatrix<T> Bsub = B.get_block(b, blockCol, block_size);
 
-    As[row][col] = Asub.get_value(row, col);
-    Bs[row][col] = Bsub.get_value(row, col);
+    As[row * block_size + col] = Asub.get_value(row, col);
+    Bs[row * block_size + col] = Bsub.get_value(row, col);
 
     __syncthreads();
 
-    for (int k = 0; k < BLOCKSIZE; ++k) {
-      sum += As[row][k] * Bs[k][col];
+    for (int k = 0; k < block_size; ++k) {
+      sum += As[row * block_size + k] * Bs[k * block_size + col];
     }
   }
   Csub.set_value(sum, row, col);
 }
 
-template <int BLOCKSIZE>
-float run_kernel(KernelType kernelType, DeviceMatrix<bf16> &dA,
-                 DeviceMatrix<bf16> &dB, DeviceMatrix<bf16> &dC,
-                 cudaStream_t stream) {
+template <typename T>
+float run_kernel(KernelType kernelType, DeviceMatrix<T> &dA,
+                 DeviceMatrix<T> &dB, DeviceMatrix<T> &dC, cudaStream_t stream,
+                 int block_size) {
   cudaEvent_t startEvent, stopEvent;
   cudaCheck(cudaEventCreate(&startEvent));
   cudaCheck(cudaEventCreate(&stopEvent));
 
-  dim3 dimBlock(BLOCKSIZE, BLOCKSIZE);
+  dim3 dimBlock(block_size, block_size);
   dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x,
                (dA.height + dimBlock.y - 1) / dimBlock.y);
 
   cudaCheck(cudaEventRecord(startEvent, 0));
   if (kernelType == KernelType::NAIVE) {
-    matrixMulNaiveKernel<<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
+    matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
   } else if (kernelType == KernelType::TILED) {
-    matrixMulTiledKernel<BLOCKSIZE>
-        <<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
+    int shared_mem_size = 2 * block_size * block_size * sizeof(T);
+    matrixMulTiledKernel<T><<<dimGrid, dimBlock, shared_mem_size, stream>>>(
+        dA, dB, dC, block_size);
   } else {
     throw std::runtime_error("Invalid kernel type");
   }
@@ -88,16 +100,85 @@ float run_kernel(KernelType kernelType, DeviceMatrix<bf16> &dA,
   return gpuExecutionTime;
 }
 
-int main() {
-  // If WIDTH != HEIGHT, then A.width must be equal to B.height (k)
-  const int WIDTH = 256;
-  const int HEIGHT = 256;
-  const int BLOCKSIZE = 32;
-  const int NUM_RUNS = 100;
+int parse_args(int argc, char *argv[], Args &args) {
+  argparse::ArgumentParser program("matrix_mul");
+  std::string kernel_type;
 
-  HostMatrix<bf16> A(WIDTH, HEIGHT);
-  HostMatrix<bf16> B(WIDTH, HEIGHT);
-  HostMatrix<bf16> C(WIDTH, HEIGHT);
+  program.add_argument("--width")
+      .help("width of the matrix")
+      .scan<'i', int>()
+      .default_value(256)
+      .store_into(args.width);
+
+  program.add_argument("--height")
+      .help("height of the matrix")
+      .scan<'i', int>()
+      .default_value(256)
+      .store_into(args.height);
+
+  program.add_argument("--block-size")
+      .help("block size")
+      .scan<'i', int>()
+      .default_value(32)
+      .store_into(args.block_size);
+
+  program.add_argument("--num-runs")
+      .help("number of runs")
+      .scan<'i', int>()
+      .default_value(100)
+      .store_into(args.num_runs);
+
+  program.add_argument("--kernel-type")
+      .help("kernel type")
+      .default_value("naive")
+      .store_into(kernel_type);
+
+  try {
+    program.parse_args(argc, argv);
+  } catch (const std::exception &err) {
+    std::cerr << err.what() << std::endl;
+    std::cerr << program;
+    return 1;
+  }
+
+  if (kernel_type == "naive") {
+    args.kernel_type = KernelType::NAIVE;
+  } else if (kernel_type == "tiled") {
+    args.kernel_type = KernelType::TILED;
+  } else {
+    std::cerr << "Invalid kernel type: " << kernel_type << std::endl;
+    return 1;
+  }
+
+  // current limitation, for later on, we need different width and height
+  // for A and B and if width != height, then A.width must be equal to B.height
+  // (k)
+  if (args.width != args.height) {
+    std::cerr << "Width and height must be equal" << std::endl;
+    return 1;
+  }
+
+  printf("Arguments:\n");
+  printf("Width: %d\n", args.width);
+  printf("Height: %d\n", args.height);
+  printf("Block size: %d\n", args.block_size);
+  printf("Number of runs: %d\n", args.num_runs);
+  printf("Kernel type: %s\n",
+         args.kernel_type == KernelType::NAIVE ? "naive" : "tiled");
+
+  return 0;
+}
+
+int main(int argc, char *argv[]) {
+
+  Args args;
+  if (parse_args(argc, argv, args) != 0) {
+    return 1;
+  }
+
+  HostMatrix<bf16> A(args.width, args.height);
+  HostMatrix<bf16> B(args.width, args.height);
+  HostMatrix<bf16> C(args.width, args.height);
 
   A.randomize(generator);
   B.randomize(generator);
@@ -110,26 +191,18 @@ int main() {
   DeviceMatrix<bf16> dC = C.to_device_async(stream);
 
   // warm up
-  run_kernel<BLOCKSIZE>(KernelType::NAIVE, dA, dB, dC, stream);
-  run_kernel<BLOCKSIZE>(KernelType::TILED, dA, dB, dC, stream);
-
-  float naiveTime = 0;
-  float tiledTime = 0;
+  run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
+  cudaCheck(cudaStreamSynchronize(stream));
 
   // measure
-  for (int i = 0; i < NUM_RUNS; i++) {
-    float time = run_kernel<BLOCKSIZE>(KernelType::NAIVE, dA, dB, dC, stream);
-    naiveTime += time;
+  float kernelTime = 0;
+  for (int i = 0; i < args.num_runs; i++) {
+    float time =
+        run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
+    kernelTime += time;
   }
-  naiveTime /= NUM_RUNS;
-  for (int i = 0; i < NUM_RUNS; i++) {
-    float time = run_kernel<BLOCKSIZE>(KernelType::TILED, dA, dB, dC, stream);
-    tiledTime += time;
-  }
-  tiledTime /= NUM_RUNS;
-
-  printf("Naive time: %f ms\n", naiveTime);
-  printf("Tiled time: %f ms\n", tiledTime);
+  kernelTime /= args.num_runs;
+  printf("Kernel GPU execution time: %f ms\n", kernelTime);
 
   printf("Copying results to host\n");
   C.from_device_async(dC, stream);
