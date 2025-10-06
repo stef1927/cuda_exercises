@@ -96,9 +96,9 @@ float run_kernel(KernelType kernelType, DeviceMatrix<T> &dA,
 
   dim3 dimBlock(block_size, block_size);
   dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x,
-               (dA.height + dimBlock.y - 1) / dimBlock.y);
+               (dB.height + dimBlock.y - 1) / dimBlock.y);
 
-  cudaCheck(cudaEventRecord(startEvent, 0));
+  cudaCheck(cudaEventRecord(startEvent, stream));
   if (kernelType == KernelType::NAIVE) {
     matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
   } else if (kernelType == KernelType::TILED) {
@@ -108,7 +108,8 @@ float run_kernel(KernelType kernelType, DeviceMatrix<T> &dA,
   } else {
     throw std::runtime_error("Invalid kernel type");
   }
-  cudaCheck(cudaEventRecord(stopEvent, 0));
+  cudaCheck(cudaGetLastError());
+  cudaCheck(cudaEventRecord(stopEvent, stream));
   cudaCheck(cudaEventSynchronize(stopEvent));
 
   float gpuExecutionTime = 0;
@@ -116,7 +117,7 @@ float run_kernel(KernelType kernelType, DeviceMatrix<T> &dA,
   return gpuExecutionTime;
 }
 
-int parse_args(int argc, char *argv[], Args &args) {
+int parse_args(int argc, char *argv[], Args &args, cudaDeviceProp &deviceProp) {
   argparse::ArgumentParser program("matrix_mul");
   std::string kernel_type;
 
@@ -141,7 +142,7 @@ int parse_args(int argc, char *argv[], Args &args) {
   program.add_argument("--num-runs")
       .help("number of runs")
       .scan<'i', int>()
-      .default_value(100)
+      .default_value(1)
       .store_into(args.num_runs);
 
   program.add_argument("--kernel-type")
@@ -166,11 +167,24 @@ int parse_args(int argc, char *argv[], Args &args) {
     return 1;
   }
 
-  // current limitation, for later on, we need different width and height
-  // for A and B and if width != height, then A.width must be equal to B.height
-  // (k)
+  // current limitation, for later on, we need to support different width and
+  // height for A and B and A.width must be equal to B.height (k)
   if (args.width != args.height) {
     std::cerr << "Width and height must be equal" << std::endl;
+    return 1;
+  }
+
+  if ((args.block_size * args.block_size) > deviceProp.maxThreadsPerBlock) {
+    std::cerr << "Block size must be less than or equal to the maximum number "
+                 "of threads per block"
+              << std::endl;
+    return 1;
+  }
+
+  if ((2 * args.block_size * args.block_size) > deviceProp.sharedMemPerBlock) {
+    std::cerr << "Block size must be less than or equal to the maximum number "
+                 "of shared memory per block"
+              << std::endl;
     return 1;
   }
 
@@ -187,8 +201,9 @@ int parse_args(int argc, char *argv[], Args &args) {
 
 int main(int argc, char *argv[]) {
 
+  cudaDeviceProp deviceProp = getDeviceProperties(0, true);
   Args args;
-  if (parse_args(argc, argv, args) != 0) {
+  if (parse_args(argc, argv, args, deviceProp) != 0) {
     return 1;
   }
 
@@ -203,6 +218,9 @@ int main(int argc, char *argv[]) {
   printf("Performaing matrix multiplication on CPU\n");
   matrixMulCpu<bf16>(A, B, C_ref);
 
+  // A.print_row("A", 0);
+  // B.print_row("B", 0);
+
   printf("Initializing device matrices\n");
   cudaStream_t stream;
   cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -216,37 +234,40 @@ int main(int argc, char *argv[]) {
   cudaCheck(cudaStreamSynchronize(stream));
 
   // measure
-  float matrixMulTimeMsec = 0;
-  for (int i = 0; i < args.num_runs; i++) {
-    float time =
-        run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
-    matrixMulTimeMsec += time;
-  }
-  matrixMulTimeMsec /= args.num_runs;
+  if (args.num_runs > 0) {
+    float matrixMulTimeMsec = 0;
+    for (int i = 0; i < args.num_runs; i++) {
+      float time = run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream,
+                                    args.block_size);
+      matrixMulTimeMsec += time;
+    }
+    matrixMulTimeMsec /= args.num_runs;
 
-  double flopsPerMatrixMul = 2.0 * static_cast<double>(args.width) *
-                             static_cast<double>(args.height) *
-                             static_cast<double>(args.width);
-  double tFlops =
-      (flopsPerMatrixMul * 1.0e-12f) / (matrixMulTimeMsec / 1000.0f);
-  printf("Performance= %.2f TFLOP/s, Time= %.3f msec, Size= %.0f Ops,"
-         " WorkgroupSize= %u threads/block\n",
-         tFlops, matrixMulTimeMsec, flopsPerMatrixMul,
-         args.block_size * args.block_size);
+    double flopsPerMatrixMul = 2.0 * static_cast<double>(args.width) *
+                               static_cast<double>(args.height) *
+                               static_cast<double>(args.width);
+    double tFlops =
+        (flopsPerMatrixMul * 1.0e-12f) / (matrixMulTimeMsec / 1000.0f);
+    printf("Performance= %.2f TFLOP/s, Time= %.3f msec, Size= %.0f Ops,"
+           " WorkgroupSize= %u threads/block\n",
+           tFlops, matrixMulTimeMsec, flopsPerMatrixMul,
+           args.block_size * args.block_size);
+  }
 
   printf("Copying results to host\n");
   C.from_device_async(dC, stream);
   cudaCheck(cudaStreamSynchronize(stream));
-  cudaCheck(cudaStreamDestroy(stream));
+
+  // C_ref.print_row("C_ref", 0);
 
   printf("Verifying results\n");
   C.verify(C_ref);
 
   printf("Releasing memory\n");
-  dC.close();
-  dA.close();
-  dB.close();
-
+  dC.close(stream);
+  dA.close(stream);
+  dB.close(stream);
+  cudaCheck(cudaStreamDestroy(stream));
   A.close();
   B.close();
   C.close();

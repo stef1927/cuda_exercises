@@ -93,16 +93,17 @@ public:
   int get_size() const { return width * height; }
 
   void randomize(std::default_random_engine &generator) {
-    std::normal_distribution<float> distribution(0, 1);
+    std::uniform_real_distribution<float> distribution(-10.0f, 10.0f);
     for (int i = 0; i < get_size(); i++) {
-      data[i] = distribution(generator);
+      float val = distribution(generator);
+      data[i] = static_cast<T>(val);
     }
   }
 
   bool verify(const HostMatrix<T> &other, float tolerance = 0.1) const {
     for (int i = 0; i < get_size(); i++) {
-      float a = data[i];
-      float b = other.data[i];
+      float a = static_cast<float>(data[i]);
+      float b = static_cast<float>(other.data[i]);
       float diff = std::fabs(a - b);
       if (diff > tolerance) {
         printf("Divergence! Should %5.2f, Is %5.2f (Diff %5.2f) at [%d,%d]\n",
@@ -112,6 +113,14 @@ public:
     }
     printf("Matrix verified successfully\n");
     return true;
+  }
+
+  void print_row(const std::string &name, int row) const {
+    printf("%s Row %d: [", name.c_str(), row);
+    for (int i = 0; i < width; i++) {
+      printf("%5.2f ", static_cast<float>(data[row * width + i]));
+    }
+    printf("]\n");
   }
 
   inline T get_value(int row, int col) const {
@@ -170,9 +179,9 @@ public:
   __host__ __device__ DeviceMatrix &
   operator=(DeviceMatrix &&other) noexcept = default;
 
-  __host__ void close() {
+  __host__ void close(cudaStream_t stream) {
     if (data != nullptr) {
-      cudaCheck(cudaFree(data));
+      cudaCheck(cudaFreeAsync(data, stream));
       data = nullptr;
     }
   }

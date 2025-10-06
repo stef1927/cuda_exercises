@@ -15,4 +15,19 @@ inline void __cudaCheck(cudaError_t error, const char *file, int line) {
 
 #define cudaCheck(err) (__cudaCheck(err, __FILE__, __LINE__))
 
+inline cudaDeviceProp getDeviceProperties(int dev = 0, bool print = true) {
+  cudaDeviceProp deviceProp;
+  cudaCheck(cudaGetDeviceProperties(&deviceProp, dev));
+  if (print) {
+    printf("Device %d: %s\n", dev, deviceProp.name);
+    printf("  CUDA Capability Major/Minor version number: %d.%d\n",
+           deviceProp.major, deviceProp.minor);
+    printf("  Total amount of shared memory per block: %zu bytes\n",
+           deviceProp.sharedMemPerBlock);
+    printf("  Maximum number of threads per block: %d\n",
+           deviceProp.maxThreadsPerBlock);
+  }
+
+  return deviceProp;
+}
 #endif // CUDA_EXERCISES_UTILS_H
