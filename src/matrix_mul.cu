@@ -195,14 +195,23 @@ int main(int argc, char *argv[]) {
   cudaCheck(cudaStreamSynchronize(stream));
 
   // measure
-  float kernelTime = 0;
+  float matrixMulTimeMsec = 0;
   for (int i = 0; i < args.num_runs; i++) {
     float time =
         run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
-    kernelTime += time;
+    matrixMulTimeMsec += time;
   }
-  kernelTime /= args.num_runs;
-  printf("Kernel GPU execution time: %f ms\n", kernelTime);
+  matrixMulTimeMsec /= args.num_runs;
+
+  double flopsPerMatrixMul = 2.0 * static_cast<double>(args.width) *
+                             static_cast<double>(args.height) *
+                             static_cast<double>(args.width);
+  double tFlops =
+      (flopsPerMatrixMul * 1.0e-12f) / (matrixMulTimeMsec / 1000.0f);
+  printf("Performance= %.2f TFLOP/s, Time= %.3f msec, Size= %.0f Ops,"
+         " WorkgroupSize= %u threads/block\n",
+         tFlops, matrixMulTimeMsec, flopsPerMatrixMul,
+         args.block_size * args.block_size);
 
   printf("Copying results to host\n");
   C.from_device_async(dC, stream);
