@@ -24,10 +24,24 @@ struct Args {
 };
 
 template <typename T>
+void matrixMulCpu(const HostMatrix<T> &A, const HostMatrix<T> &B,
+                  HostMatrix<T> &C) {
+  for (int row = 0; row < A.get_height(); row++) {
+    for (int col = 0; col < B.get_width(); col++) {
+      T sum = 0.0;
+      for (int k = 0; k < A.get_width(); k++) {
+        sum += A.get_value(row, k) * B.get_value(k, col);
+      }
+      C.set_value(sum, row, col);
+    }
+  }
+}
+
+template <typename T>
 __global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
                                      DeviceMatrix<T> C) {
-  const int row = blockIdx.x * blockDim.x + threadIdx.x;
-  const int col = blockIdx.y * blockDim.y + threadIdx.y;
+  const int row = blockIdx.y * blockDim.y + threadIdx.y;
+  const int col = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (row < C.height && col < C.width) {
     T sum = 0.0;
@@ -66,6 +80,8 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
     for (int k = 0; k < block_size; ++k) {
       sum += As[row * block_size + k] * Bs[k * block_size + col];
     }
+
+    __syncthreads();
   }
   Csub.set_value(sum, row, col);
 }
@@ -179,10 +195,15 @@ int main(int argc, char *argv[]) {
   HostMatrix<bf16> A(args.width, args.height);
   HostMatrix<bf16> B(args.width, args.height);
   HostMatrix<bf16> C(args.width, args.height);
+  HostMatrix<bf16> C_ref(args.width, args.height);
 
   A.randomize(generator);
   B.randomize(generator);
 
+  printf("Performaing matrix multiplication on CPU\n");
+  matrixMulCpu<bf16>(A, B, C_ref);
+
+  printf("Initializing device matrices\n");
   cudaStream_t stream;
   cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
@@ -218,7 +239,10 @@ int main(int argc, char *argv[]) {
   cudaCheck(cudaStreamSynchronize(stream));
   cudaCheck(cudaStreamDestroy(stream));
 
-  C.verify(C); // TODO - replace C with a reference matrix
+  printf("Verifying results\n");
+  C.verify(C_ref);
+
+  printf("Releasing memory\n");
   dC.close();
   dA.close();
   dB.close();

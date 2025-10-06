@@ -114,6 +114,19 @@ public:
     return true;
   }
 
+  inline T get_value(int row, int col) const {
+    if (row >= 0 && row < height && col >= 0 && col < width) {
+      return data[row * width + col];
+    }
+    return 0;
+  }
+
+  inline void set_value(T val, int row, int col) {
+    if (row >= 0 && row < height && col >= 0 && col < width) {
+      data[row * width + col] = val;
+    }
+  }
+
 private:
   void allocate() {
     cudaCheck(cudaMallocHost((void **)&data, get_size() * sizeof(T)));
@@ -183,8 +196,8 @@ public:
       return DeviceMatrix<T>(0, 0, 0, nullptr);
     }
     T *block_data = &data[row * block_size * stride + col * block_size];
-    int width = block_size <= width - col ? block_size : width - col;
-    int height = block_size <= height - row ? block_size : height - row;
+    int width = block_size <= (width - col) ? block_size : width - col;
+    int height = block_size <= (height - row) ? block_size : height - row;
     DeviceMatrix<T> block(width, stride, height, block_data);
     return block;
   }
