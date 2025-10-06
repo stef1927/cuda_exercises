@@ -10,7 +10,9 @@
 
 typedef __nv_bfloat16 bf16;
 
-std::default_random_engine generator(786);
+static std::default_random_engine generator(786);
+
+enum class KernelType { NAIVE, TILED };
 
 __global__ void matrixMulNaiveKernel(DeviceMatrix<bf16> A, DeviceMatrix<bf16> B,
                                      DeviceMatrix<bf16> C) {
@@ -57,12 +59,41 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<bf16> A, DeviceMatrix<bf16> B,
   Csub.set_value(sum, row, col);
 }
 
+template <int BLOCKSIZE>
+float run_kernel(KernelType kernelType, DeviceMatrix<bf16> &dA,
+                 DeviceMatrix<bf16> &dB, DeviceMatrix<bf16> &dC,
+                 cudaStream_t stream) {
+  cudaEvent_t startEvent, stopEvent;
+  cudaCheck(cudaEventCreate(&startEvent));
+  cudaCheck(cudaEventCreate(&stopEvent));
+
+  dim3 dimBlock(BLOCKSIZE, BLOCKSIZE);
+  dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x,
+               (dA.height + dimBlock.y - 1) / dimBlock.y);
+
+  cudaCheck(cudaEventRecord(startEvent, 0));
+  if (kernelType == KernelType::NAIVE) {
+    matrixMulNaiveKernel<<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
+  } else if (kernelType == KernelType::TILED) {
+    matrixMulTiledKernel<BLOCKSIZE>
+        <<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
+  } else {
+    throw std::runtime_error("Invalid kernel type");
+  }
+  cudaCheck(cudaEventRecord(stopEvent, 0));
+  cudaCheck(cudaEventSynchronize(stopEvent));
+
+  float gpuExecutionTime = 0;
+  cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
+  return gpuExecutionTime;
+}
+
 int main() {
   // If WIDTH != HEIGHT, then A.width must be equal to B.height (k)
   const int WIDTH = 256;
   const int HEIGHT = 256;
   const int BLOCKSIZE = 32;
-  const bool NAIVE = false;
+  const int NUM_RUNS = 100;
 
   HostMatrix<bf16> A(WIDTH, HEIGHT);
   HostMatrix<bf16> B(WIDTH, HEIGHT);
@@ -71,26 +102,39 @@ int main() {
   A.randomize(generator);
   B.randomize(generator);
 
-  DeviceMatrix<bf16> dA = A.to_device();
-  DeviceMatrix<bf16> dB = B.to_device();
-  DeviceMatrix<bf16> dC = C.to_device();
+  cudaStream_t stream;
+  cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
-  dim3 dimBlock(BLOCKSIZE, BLOCKSIZE);
-  dim3 dimGrid((WIDTH + dimBlock.x - 1) / dimBlock.x,
-               (HEIGHT + dimBlock.y - 1) / dimBlock.y);
+  DeviceMatrix<bf16> dA = A.to_device_async(stream);
+  DeviceMatrix<bf16> dB = B.to_device_async(stream);
+  DeviceMatrix<bf16> dC = C.to_device_async(stream);
 
-  printf("Kernel started: %s\n", NAIVE ? "naive" : "tiled");
-  if (NAIVE) {
-    matrixMulNaiveKernel<<<dimGrid, dimBlock>>>(dA, dB, dC);
-  } else {
-    matrixMulTiledKernel<BLOCKSIZE><<<dimGrid, dimBlock>>>(dA, dB, dC);
+  // warm up
+  run_kernel<BLOCKSIZE>(KernelType::NAIVE, dA, dB, dC, stream);
+  run_kernel<BLOCKSIZE>(KernelType::TILED, dA, dB, dC, stream);
+
+  float naiveTime = 0;
+  float tiledTime = 0;
+
+  // measure
+  for (int i = 0; i < NUM_RUNS; i++) {
+    float time = run_kernel<BLOCKSIZE>(KernelType::NAIVE, dA, dB, dC, stream);
+    naiveTime += time;
   }
-  printf("Kernel ended\n");
-  cudaCheck(cudaDeviceSynchronize());
+  naiveTime /= NUM_RUNS;
+  for (int i = 0; i < NUM_RUNS; i++) {
+    float time = run_kernel<BLOCKSIZE>(KernelType::TILED, dA, dB, dC, stream);
+    tiledTime += time;
+  }
+  tiledTime /= NUM_RUNS;
+
+  printf("Naive time: %f ms\n", naiveTime);
+  printf("Tiled time: %f ms\n", tiledTime);
 
   printf("Copying results to host\n");
-  C.from_device(dC);
-  cudaCheck(cudaDeviceSynchronize());
+  C.from_device_async(dC, stream);
+  cudaCheck(cudaStreamSynchronize(stream));
+  cudaCheck(cudaStreamDestroy(stream));
 
   C.verify(C); // TODO - replace C with a reference matrix
   dC.close();

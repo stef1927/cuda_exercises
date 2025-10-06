@@ -60,18 +60,19 @@ public:
     return *this;
   }
 
-  DeviceMatrix<T> to_device() const {
+  DeviceMatrix<T> to_device_async(cudaStream_t stream) const {
     if (data == nullptr) {
       throw std::runtime_error("Cannot copy from a moved-from HostMatrix");
     }
     T *device_data = nullptr;
-    cudaCheck(cudaMalloc((void **)&device_data, get_size() * sizeof(T)));
-    cudaCheck(cudaMemcpy(device_data, data, get_size() * sizeof(T),
-                         cudaMemcpyHostToDevice));
+    cudaCheck(
+        cudaMallocAsync((void **)&device_data, get_size() * sizeof(T), stream));
+    cudaCheck(cudaMemcpyAsync(device_data, data, get_size() * sizeof(T),
+                              cudaMemcpyHostToDevice, stream));
     return DeviceMatrix<T>(width, width, height, device_data);
   }
 
-  void from_device(const DeviceMatrix<T> &other) {
+  void from_device_async(const DeviceMatrix<T> &other, cudaStream_t stream) {
     if (other.data == nullptr) {
       throw std::runtime_error("Cannot copy from a moved-from DeviceMatrix");
     }
@@ -81,8 +82,8 @@ public:
     if (width != other.width || height != other.height) {
       throw std::runtime_error("Cannot copy matrices of different sizes");
     }
-    cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T),
-                         cudaMemcpyDeviceToHost));
+    cudaCheck(cudaMemcpyAsync(data, other.data, get_size() * sizeof(T),
+                              cudaMemcpyDeviceToHost, stream));
   }
 
   int get_width() const { return width; }

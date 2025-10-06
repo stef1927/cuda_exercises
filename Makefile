@@ -7,7 +7,7 @@ SRC_DIR = ./src
 OUTPUT_DIR = ./build
 OUTPUT_FILE = $(OUTPUT_DIR)/$@
 
-NCU_OUTPUT_DIR = /reports
+NCU_OUTPUT_DIR = /tmp/reports
 NCU_OUTPUT_FILE = $(NCU_OUTPUT_DIR)/$@
 
 device_query: $(SRC_DIR)/device_query.cu
