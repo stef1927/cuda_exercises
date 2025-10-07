@@ -104,8 +104,8 @@ __global__ void histogramKernel(unsigned char *d_inputData,
   }
   __syncthreads();
 
-  // Each thread is responsible for updating one input element into the private
-  // histogram
+  // Each thread is responsible for updating coarsening_factor input elements
+  // into the private histogram
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = idx * coarsening_factor; i < (idx + 1) * coarsening_factor;
        ++i) {
@@ -118,9 +118,7 @@ __global__ void histogramKernel(unsigned char *d_inputData,
   // Merge the private histogram into the global histogram
   for (int i = threadIdx.x; i < NUM_BINS; i += blockDim.x) {
     unsigned int val = s_histogram[i];
-    if (val > 0) {
-      atomicAdd(&d_histogramGPU[i], val);
-    }
+    atomicAdd(&d_histogramGPU[i], val);
   }
   __syncthreads();
 }
@@ -135,6 +133,7 @@ void launchKernel(unsigned char *d_inputData, unsigned int *d_histogramGPU,
   dim3 dimGrid((args.byte_count + dimBlockTotal - 1) / dimBlockTotal);
   histogramKernel<<<dimGrid, dimBlock, 0, stream>>>(
       d_inputData, d_histogramGPU, args.byte_count, args.coarsening_factor);
+  cudaCheck(cudaGetLastError());
 }
 
 int main(int argc, char *argv[]) {
@@ -177,7 +176,10 @@ int main(int argc, char *argv[]) {
   cudaCheck(cudaStreamSynchronize(stream));
   float gpuExecutionTime = 0;
   cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
-  printf("Time to calculate histogram on GPU: %f ms\n", gpuExecutionTime);
+  printf("Time to calculate histogram on GPU: %f ms, throuput %f MB/s, size %d "
+         "MB\n",
+         gpuExecutionTime, 1e-06 * args.byte_count / gpuExecutionTime,
+         args.byte_count / ONE_MB);
 
   bool isVerified = verifyHistogram(histogramCPU, histogramGPU);
 

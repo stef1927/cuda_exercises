@@ -7,7 +7,7 @@ SRC_DIR = ./src
 OUTPUT_DIR = ./build
 OUTPUT_FILE = $(OUTPUT_DIR)/$@
 
-NCU_OUTPUT_DIR = /tmp/reports
+NCU_OUTPUT_DIR = ~/reports
 NCU_OUTPUT_FILE = $(NCU_OUTPUT_DIR)/$@
 
 vector_add: $(SRC_DIR)/vector_add.cu
@@ -26,7 +26,7 @@ histogram: $(SRC_DIR)/histogram.cu
 	$(NVCC) -o $(OUTPUT_FILE) $^
 
 histogram_profile: $(OUTPUT_DIR)/histogram
-	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^ --byte-count 128 --coarsening-factor 8 --block-size 128
 
 clean:
 	rm -f $(OUTPUT_DIR)/vector_add
