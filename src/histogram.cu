@@ -80,8 +80,8 @@ unsigned char *generateInputData(int byte_count) {
 bool verifyHistogram(unsigned int *histogramCPU, unsigned int *histogramGPU) {
   for (int i = 0; i < NUM_BINS; i++) {
     if (histogramCPU[i] != histogramGPU[i]) {
-      printf("Histogram mismatch at index %d: %d != %d\n", i, histogramCPU[i],
-             histogramGPU[i]);
+      printf("Histogram mismatch at index %d: should: %d, is: %d\n", i,
+             histogramCPU[i], histogramGPU[i]);
       return false;
     }
   }
