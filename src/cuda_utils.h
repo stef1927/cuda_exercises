@@ -20,6 +20,7 @@ inline cudaDeviceProp getDeviceProperties(int dev = 0, bool print = true) {
   cudaCheck(cudaGetDeviceProperties(&deviceProp, dev));
   if (print) {
     printf("Device %d: %s\n", dev, deviceProp.name);
+    printf("  Multiprocessor count: %d\n", deviceProp.multiProcessorCount);
     printf("  CUDA Capability Major/Minor version number: %d.%d\n",
            deviceProp.major, deviceProp.minor);
     printf("  Total amount of shared memory per block: %zu bytes\n",
