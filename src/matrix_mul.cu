@@ -6,8 +6,8 @@
 #include <stdlib.h>
 
 #include "argparse.hpp"
+#include "cuda_utils.h"
 #include "matrix.h"
-#include "utils.h"
 
 typedef __nv_bfloat16 bf16;
 
