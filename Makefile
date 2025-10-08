@@ -26,9 +26,16 @@ histogram: $(SRC_DIR)/histogram.cu
 	$(NVCC) -o $(OUTPUT_FILE) $^
 
 histogram_profile: $(OUTPUT_DIR)/histogram
-	$(NCU) -o $(NCU_OUTPUT_FILE) $^ --byte-count 128 --coarsening-factor 8 --block-size 128
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+
+reduction: $(SRC_DIR)/reduction.cu
+	$(NVCC) -o $(OUTPUT_FILE) $^
+
+reduction_profile: $(OUTPUT_DIR)/reduction
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^
 
 clean:
 	rm -f $(OUTPUT_DIR)/vector_add
 	rm -f $(OUTPUT_DIR)/matrix_mul
 	rm -f $(OUTPUT_DIR)/histogram
+	rm -f $(OUTPUT_DIR)/reduction
