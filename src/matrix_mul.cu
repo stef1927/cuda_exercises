@@ -1,9 +1,10 @@
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
-#include <random>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <random>
 
 #include "argparse.hpp"
 #include "cuda_utils.h"
@@ -24,8 +25,7 @@ struct Args {
 };
 
 template <typename T>
-void matrixMulCpu(const HostMatrix<T> &A, const HostMatrix<T> &B,
-                  HostMatrix<T> &C) {
+void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>& C) {
   for (int row = 0; row < A.get_height(); row++) {
     for (int col = 0; col < B.get_width(); col++) {
       T sum = 0.0;
@@ -38,8 +38,7 @@ void matrixMulCpu(const HostMatrix<T> &A, const HostMatrix<T> &B,
 }
 
 template <typename T>
-__global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
-                                     DeviceMatrix<T> C) {
+__global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, DeviceMatrix<T> C) {
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -54,17 +53,15 @@ __global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
 }
 
 template <typename T>
-__global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
-                                     DeviceMatrix<T> C, int block_size) {
-
+__global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, DeviceMatrix<T> C, int block_size) {
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
   const int blockCol = blockIdx.x;
   const int col = threadIdx.x;
 
   extern __shared__ T smem[];
-  T *As = &smem[0];
-  T *Bs = &smem[block_size * block_size];
+  T* As = &smem[0];
+  T* Bs = &smem[block_size * block_size];
 
   DeviceMatrix<T> Csub = C.get_block(blockRow, blockCol, block_size);
   T sum = 0.0;
@@ -87,24 +84,21 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B,
 }
 
 template <typename T>
-float run_kernel(KernelType kernelType, DeviceMatrix<T> &dA,
-                 DeviceMatrix<T> &dB, DeviceMatrix<T> &dC, cudaStream_t stream,
-                 int block_size) {
+float run_kernel(KernelType kernelType, DeviceMatrix<T>& dA, DeviceMatrix<T>& dB, DeviceMatrix<T>& dC,
+                 cudaStream_t stream, int block_size) {
   cudaEvent_t startEvent, stopEvent;
   cudaCheck(cudaEventCreate(&startEvent));
   cudaCheck(cudaEventCreate(&stopEvent));
 
   dim3 dimBlock(block_size, block_size);
-  dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x,
-               (dB.height + dimBlock.y - 1) / dimBlock.y);
+  dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x, (dB.height + dimBlock.y - 1) / dimBlock.y);
 
   cudaCheck(cudaEventRecord(startEvent, stream));
   if (kernelType == KernelType::NAIVE) {
     matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
   } else if (kernelType == KernelType::TILED) {
     int shared_mem_size = 2 * block_size * block_size * sizeof(T);
-    matrixMulTiledKernel<T><<<dimGrid, dimBlock, shared_mem_size, stream>>>(
-        dA, dB, dC, block_size);
+    matrixMulTiledKernel<T><<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA, dB, dC, block_size);
   } else {
     throw std::runtime_error("Invalid kernel type");
   }
@@ -117,7 +111,7 @@ float run_kernel(KernelType kernelType, DeviceMatrix<T> &dA,
   return gpuExecutionTime;
 }
 
-int parse_args(int argc, char *argv[], Args &args, cudaDeviceProp &deviceProp) {
+int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
   argparse::ArgumentParser program("matrix_mul");
   std::string kernel_type;
 
@@ -139,20 +133,13 @@ int parse_args(int argc, char *argv[], Args &args, cudaDeviceProp &deviceProp) {
       .default_value(32)
       .store_into(args.block_size);
 
-  program.add_argument("--num-runs")
-      .help("number of runs")
-      .scan<'i', int>()
-      .default_value(1)
-      .store_into(args.num_runs);
+  program.add_argument("--num-runs").help("number of runs").scan<'i', int>().default_value(1).store_into(args.num_runs);
 
-  program.add_argument("--kernel-type")
-      .help("kernel type")
-      .default_value("naive")
-      .store_into(kernel_type);
+  program.add_argument("--kernel-type").help("kernel type").default_value("naive").store_into(kernel_type);
 
   try {
     program.parse_args(argc, argv);
-  } catch (const std::exception &err) {
+  } catch (const std::exception& err) {
     std::cerr << err.what() << std::endl;
     std::cerr << program;
     return 1;
@@ -193,14 +180,12 @@ int parse_args(int argc, char *argv[], Args &args, cudaDeviceProp &deviceProp) {
   printf("Height: %d\n", args.height);
   printf("Block size: %d\n", args.block_size);
   printf("Number of runs: %d\n", args.num_runs);
-  printf("Kernel type: %s\n",
-         args.kernel_type == KernelType::NAIVE ? "naive" : "tiled");
+  printf("Kernel type: %s\n", args.kernel_type == KernelType::NAIVE ? "naive" : "tiled");
 
   return 0;
 }
 
-int main(int argc, char *argv[]) {
-
+int main(int argc, char* argv[]) {
   cudaDeviceProp deviceProp = getDeviceProperties(0, true);
   Args args;
   if (parse_args(argc, argv, args, deviceProp) != 0) {
@@ -237,21 +222,18 @@ int main(int argc, char *argv[]) {
   if (args.num_runs > 0) {
     float matrixMulTimeMsec = 0;
     for (int i = 0; i < args.num_runs; i++) {
-      float time = run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream,
-                                    args.block_size);
+      float time = run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
       matrixMulTimeMsec += time;
     }
     matrixMulTimeMsec /= args.num_runs;
 
-    double flopsPerMatrixMul = 2.0 * static_cast<double>(args.width) *
-                               static_cast<double>(args.height) *
-                               static_cast<double>(args.width);
-    double tFlops =
-        (flopsPerMatrixMul * 1.0e-12f) / (matrixMulTimeMsec / 1000.0f);
-    printf("Performance= %.2f TFLOP/s, Time= %.3f msec, Size= %.0f Ops,"
-           " WorkgroupSize= %u threads/block\n",
-           tFlops, matrixMulTimeMsec, flopsPerMatrixMul,
-           args.block_size * args.block_size);
+    double flopsPerMatrixMul =
+        2.0 * static_cast<double>(args.width) * static_cast<double>(args.height) * static_cast<double>(args.width);
+    double tFlops = (flopsPerMatrixMul * 1.0e-12f) / (matrixMulTimeMsec / 1000.0f);
+    printf(
+        "Performance= %.2f TFLOP/s, Time= %.3f msec, Size= %.0f Ops,"
+        " WorkgroupSize= %u threads/block\n",
+        tFlops, matrixMulTimeMsec, flopsPerMatrixMul, args.block_size * args.block_size);
   }
 
   printf("Copying results to host\n");

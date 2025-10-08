@@ -4,4 +4,4 @@ CompileFlags:
     - "--cuda-path=/usr/local/cuda-12.6"
     - "-xcuda"
     - "--cuda-gpu-arch=sm_89"
-    - "-std=c++17"
+    - "-std=c++20"
