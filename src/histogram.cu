@@ -22,17 +22,17 @@ int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
   program.add_argument("--byte-count")
       .help("byte count in MB")
       .scan<'i', int>()
-      .default_value(64)
+      .default_value(128)
       .store_into(args.byte_count);
   program.add_argument("--coarsening-factor")
       .help("coarsening factor")
       .scan<'i', int>()
-      .default_value(1)
+      .default_value(4)
       .store_into(args.coarsening_factor);
   program.add_argument("--block-size")
       .help("block size")
       .scan<'i', int>()
-      .default_value(256)
+      .default_value(128)
       .store_into(args.block_size);
   try {
     program.parse_args(argc, argv);
@@ -104,11 +104,12 @@ __global__ void histogramKernel(const unsigned int* d_inputData, int input_size,
   __syncthreads();
 
   // Each thread is responsible for updating coarsening_factor input elements
-  // into the private histogram
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  for (int i = idx * coarsening_factor; i < (idx + 1) * coarsening_factor; ++i) {
-    if (i < input_size) {
-      unsigned int data = d_inputData[i];
+  // into the private histogram, we skip by a block to keep memory access coalesced
+  int start_idx = (blockIdx.x * blockDim.x) * coarsening_factor + threadIdx.x;
+  for (int i = 0; i < coarsening_factor; ++i) {
+    int idx = start_idx + (i * blockDim.x);
+    if (idx < input_size) {
+      unsigned int data = d_inputData[idx];
       atomicAdd(&s_histogram[(data >> 0) & 0xFFU], 1);
       atomicAdd(&s_histogram[(data >> 8) & 0xFFU], 1);
       atomicAdd(&s_histogram[(data >> 16) & 0xFFU], 1);
@@ -126,19 +127,21 @@ __global__ void histogramKernel(const unsigned int* d_inputData, int input_size,
 }
 
 void launchKernel(unsigned char* d_inputData, unsigned int* d_histogramGPU, const Args& args, cudaStream_t stream) {
-  // The kernel will load input data as unsigned ints to reduce the number of
-  // uncoalesced accesses from the global memory.
+  // The kernel will load input data as unsigned ints to reduce global memory
+  // access requests and ensure that they are aligned.
   if (args.byte_count % sizeof(unsigned int) != 0) {
     throw std::runtime_error("Byte count must be divisible by " + std::to_string(sizeof(unsigned int)));
   }
-
+  int input_size = args.byte_count / sizeof(unsigned int);
   dim3 dimBlock(args.block_size);
   // The number of items processed by one block is the size of the block times
   // the coarsening factor because each thread is responsible for coarsening
   // factor number of items.
   int dimBlockTotal = dimBlock.x * args.coarsening_factor;
-  dim3 dimGrid((args.byte_count + dimBlockTotal - 1) / dimBlockTotal);
-  int input_size = args.byte_count / sizeof(unsigned int);
+  dim3 dimGrid((input_size + dimBlockTotal - 1) / dimBlockTotal);
+  printf("input_size: %d, dimBlock: %d, dimBlockTotal: %d, dimGrid: %d\n", input_size, dimBlock.x, dimBlockTotal,
+         dimGrid.x);
+
   histogramKernel<<<dimGrid, dimBlock, 0, stream>>>((unsigned int*)d_inputData, input_size, d_histogramGPU,
                                                     args.coarsening_factor);
   cudaCheck(cudaGetLastError());
@@ -155,7 +158,7 @@ int main(int argc, char* argv[]) {
   unsigned char* inputData = generateInputData(args.byte_count);
   unsigned int* histogramCPU = getHistogramCpu(inputData, args.byte_count);
   unsigned int* histogramGPU = new unsigned int[NUM_BINS];
-  cudaCheck(cudaHostRegister((void*)inputData, args.byte_count, cudaHostRegisterDefault));
+  cudaCheck(cudaHostRegister((void*)inputData, args.byte_count * sizeof(unsigned char), cudaHostRegisterDefault));
 
   // Create a stream, the events, and allocate device memory
   cudaStream_t stream;
@@ -165,7 +168,7 @@ int main(int argc, char* argv[]) {
   cudaCheck(cudaEventCreate(&stopEvent));
   unsigned char* d_inputData = nullptr;
   unsigned int* d_histogramGPU = nullptr;
-  cudaCheck(cudaMallocAsync((void**)&d_inputData, args.byte_count, stream));
+  cudaCheck(cudaMallocAsync((void**)&d_inputData, args.byte_count * sizeof(unsigned char), stream));
   cudaCheck(cudaMallocAsync((void**)&d_histogramGPU, NUM_BINS * sizeof(uint), stream));
   printf("Calculate histogram on GPU\n");
 

@@ -49,3 +49,5 @@ Different implementations of matrix multiplication:
 * Tiled, improves the naive implementation by loading matrix tiles into shared memory.
 
 ## Histogram
+
+Implements a 256-bin histogram using a GPU kernel with one private histogram per thread block, privatization via shared memory, atomic adds and thread coarsening. Verifies the histogram against a CPU serial implementation. Uses streams, CUDA events and async memory operations.
