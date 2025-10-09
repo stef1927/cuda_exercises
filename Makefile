@@ -34,8 +34,15 @@ reduction: $(SRC_DIR)/reduction.cu
 reduction_profile: $(OUTPUT_DIR)/reduction
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^
 
+scan: $(SRC_DIR)/scan.cu
+	$(NVCC) -o $(OUTPUT_FILE) $^
+
+scan_profile: $(OUTPUT_DIR)/scan
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+
 clean:
 	rm -f $(OUTPUT_DIR)/vector_add
 	rm -f $(OUTPUT_DIR)/matrix_mul
 	rm -f $(OUTPUT_DIR)/histogram
 	rm -f $(OUTPUT_DIR)/reduction
+	rm -f $(OUTPUT_DIR)/scan

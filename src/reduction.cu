@@ -5,7 +5,6 @@
 
 #include <cassert>
 #include <cstdlib>
-#include <cuda/atomic>
 #include <random>
 #include <vector>
 
@@ -41,7 +40,7 @@ int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
   program.add_argument("--kernel-number")
       .help("kernel number")
       .scan<'i', int>()
-      .default_value(1)
+      .default_value(2)
       .store_into(args.kernel_number);
   try {
     program.parse_args(argc, argv);
