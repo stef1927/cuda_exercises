@@ -24,7 +24,7 @@ struct Args {
   KernelType kernel_type;
 };
 
-template <typename T>
+template <Numeric T>
 void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>& C) {
   for (int row = 0; row < A.get_height(); row++) {
     for (int col = 0; col < B.get_width(); col++) {
@@ -37,7 +37,7 @@ void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>&
   }
 }
 
-template <typename T>
+template <Numeric T>
 __global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, DeviceMatrix<T> C) {
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -52,7 +52,7 @@ __global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, Devic
   }
 }
 
-template <typename T>
+template <Numeric T>
 __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, DeviceMatrix<T> C, int block_size) {
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
@@ -83,7 +83,7 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, Devic
   Csub.set_value(sum, row, col);
 }
 
-template <typename T>
+template <Numeric T>
 float run_kernel(KernelType kernelType, DeviceMatrix<T>& dA, DeviceMatrix<T>& dB, DeviceMatrix<T>& dC,
                  cudaStream_t stream, int block_size) {
   cudaEvent_t startEvent, stopEvent;
