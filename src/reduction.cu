@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <cuda/atomic>
 #include <random>
 #include <vector>
 
@@ -89,7 +90,7 @@ unsigned long long reduceCpu(const std::vector<int>& inputData) {
 
 // Naive kernel where all threads perform an atomic add, this will not perform well because
 // it will have a lot of contention on the atomic add
-__global__ void reductionKernel0(int* d_inputData, unsigned long long* d_outputData, int size) {
+__global__ void reductionKernel0(int* d_inputData, int size, unsigned long long* d_outputData) {
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid < size) {
     atomicAdd(d_outputData, d_inputData[tid]);
@@ -101,22 +102,21 @@ __global__ void reductionKernel0(int* d_inputData, unsigned long long* d_outputD
 // stride is progressively halved until only one result remains, the one for the first thread,
 // which is then written to the output. The cooperative threads API are used to synchronize
 // every pass into shared memory.
-__global__ void reductionKernel1(int* d_inputData, unsigned long long* d_outputData, int size) {
-  // Handle to thread block group
-  cg::thread_block cta = cg::this_thread_block();
-  extern __shared__ int sdata[];  // blockDim.x * sizeof(int)
+__global__ void reductionKernel1(int* d_inputData, int size, unsigned long long* d_outputData) {
+  auto cta = cg::this_thread_block();      // the thread block group
+  extern __shared__ unsigned int sdata[];  // blockDim.x * sizeof(unsigned int)
 
   // Reduce from global memory to shared memory
   unsigned int tid = threadIdx.x;
   unsigned int i = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
 
-  int sum = (i < size) ? d_inputData[i] : 0;
+  unsigned int sum = (i < size) ? d_inputData[i] : 0;
 
   if (i + blockDim.x < size)
     sum += d_inputData[i + blockDim.x];
 
   sdata[tid] = sum;
-  cg::sync(cta);
+  cta.sync();
 
   // Then reduce from shared memory
   for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
@@ -124,7 +124,7 @@ __global__ void reductionKernel1(int* d_inputData, unsigned long long* d_outputD
       sdata[tid] = sum = sum + sdata[tid + stride];
     }
 
-    cg::sync(cta);
+    cta.sync();
   }
 
   // The first thread in the block writes the result to global memory
@@ -133,19 +133,48 @@ __global__ void reductionKernel1(int* d_inputData, unsigned long long* d_outputD
   }
 }
 
+/// In this kernel, we use a cooperative thread block and thread tiles of size 32 (warps) to reduce
+/// the input data using hardware accelerated reduction for warp tiles. Each thread computes its own
+/// sum from global memory by adding values over the stride and then each thread sum is reduced across
+/// tiles using the CG reduce() function.
+__global__ void reductionKernel2(int* d_inputData, int size, unsigned long long* d_outputData) {
+  auto cta = cg::this_thread_block();
+  auto warp = cg::tiled_partition<32>(cta);
+  int tid = cta.group_index().x * (cta.group_dim().x * 2) + cta.thread_index().x;
+  unsigned int thread_sum = (tid < size) ? d_inputData[tid] : 0;
+
+  if (tid + cta.group_dim().x < size) {
+    thread_sum += d_inputData[tid + cta.group_dim().x];
+  }
+
+  // reduce thread sums across each warp, cg::plus<int> allows cg::reduce() to
+  // know it can use hardware acceleration for addition
+  unsigned int warp_sum = cg::reduce(warp, thread_sum, cg::plus<unsigned int>());
+
+  if (warp.thread_rank() == 0) {
+    atomicAdd(d_outputData, (unsigned long long)warp_sum);
+  }
+}
+
 void runKernel(int* d_inputData, unsigned long long* d_outputData, Args& args) {
   switch (args.kernel_number) {
     case 0: {
       dim3 dimBlock(args.block_size);
       dim3 dimGrid((args.size + args.block_size - 1) / args.block_size);
-      reductionKernel0<<<dimGrid, dimBlock, 0>>>(d_inputData, d_outputData, args.size);
+      reductionKernel0<<<dimGrid, dimBlock, 0>>>(d_inputData, args.size, d_outputData);
       break;
     }
     case 1: {
       dim3 dimBlock(args.block_size);
       dim3 dimGrid((args.size + args.block_size * 2 - 1) / (args.block_size * 2));
-      int shared_mem_size = dimBlock.x * sizeof(int);
-      reductionKernel1<<<dimGrid, dimBlock, shared_mem_size>>>(d_inputData, d_outputData, args.size);
+      unsigned int shared_mem_size = dimBlock.x * sizeof(unsigned int);
+      reductionKernel1<<<dimGrid, dimBlock, shared_mem_size>>>(d_inputData, args.size, d_outputData);
+      break;
+    }
+    case 2: {
+      dim3 dimBlock(args.block_size);
+      dim3 dimGrid((args.size + args.block_size * 2 - 1) / (args.block_size * 2));
+      reductionKernel2<<<dimGrid, dimBlock>>>(d_inputData, args.size, d_outputData);
       break;
     }
     default:

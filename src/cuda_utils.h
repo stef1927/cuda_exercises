@@ -18,6 +18,8 @@ inline void __cudaCheck(cudaError_t error, const char* file, int line) {
 inline cudaDeviceProp getDeviceProperties(int dev = 0, bool print = true) {
   cudaDeviceProp deviceProp;
   cudaCheck(cudaGetDeviceProperties(&deviceProp, dev));
+  int supportsCoopLaunch = 0;
+  cudaDeviceGetAttribute(&supportsCoopLaunch, cudaDevAttrCooperativeLaunch, dev);
   if (print) {
     printf("Device %d: %s\n", dev, deviceProp.name);
     printf("  Multiprocessor count: %d\n", deviceProp.multiProcessorCount);
@@ -33,6 +35,7 @@ inline cudaDeviceProp getDeviceProperties(int dev = 0, bool print = true) {
            deviceProp.concurrentManagedAccess);
     printf("  Supports UMA for system memory: %s (%d)\n", deviceProp.pageableMemoryAccess > 0 ? "Yes" : "No",
            deviceProp.pageableMemoryAccess);
+    printf("  Supports cooperative launch: %s (%d)\n", supportsCoopLaunch ? "Yes" : "No", supportsCoopLaunch);
   }
 
   return deviceProp;

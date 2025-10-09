@@ -54,5 +54,5 @@ Implements a 256-bin histogram using a GPU kernel with one private histogram per
 
 ## Reduction
 
-Calculates the sum of a large array of integers. Demonstrates reduction using shared memory and contiguous threads to limit control divergence,
-warp shuffling and cooperative thread clusters.
+Calculates the sum of a large array of integers. Demonstrates using cooperative groups, including
+reduction over a warp tile group.
