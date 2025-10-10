@@ -7,14 +7,10 @@
 
 #include <cmath>
 #include <cstring>
-#include <cuda/std/concepts>
 #include <random>
 #include <stdexcept>
 
 #include "cuda_utils.h"
-
-template <typename T>
-concept Numeric = cuda::std::integral<T> || cuda::std::floating_point<T> || cuda::std::is_same_v<T, __nv_bfloat16>;
 
 // Forward declaration of DeviceMatrix
 template <Numeric T>

@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cuda/std/concepts>
+#include <cuda/std/optional>
 #include <memory>
 
 template <typename T>
@@ -48,14 +49,15 @@ inline cudaDeviceProp getDeviceProperties(int dev = 0, bool print = true) {
 
 class CudaEventRecorder {
  public:
-  CudaEventRecorder(const char* operation_name, cudaStream_t stream) : operation_name(operation_name), stream(stream) {
+  CudaEventRecorder(const char* operation_name, cuda::std::optional<cudaStream_t> stream = nullptr)
+      : operation_name(operation_name), stream(stream) {
     cudaCheck(cudaEventCreate(&startEvent));
     cudaCheck(cudaEventCreate(&stopEvent));
-    cudaCheck(cudaEventRecord(startEvent, stream));
+    cudaCheck(cudaEventRecord(startEvent, stream.value_or(nullptr)));
   }
 
   ~CudaEventRecorder() {
-    cudaCheck(cudaEventRecord(stopEvent, stream));
+    cudaCheck(cudaEventRecord(stopEvent, stream.value_or(nullptr)));
     cudaCheck(cudaEventSynchronize(stopEvent));
     float gpuExecutionTime = 0;
     cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
@@ -94,7 +96,7 @@ class CudaEventRecorder {
 
  private:
   const char* operation_name;
-  cudaStream_t stream;
+  cuda::std::optional<cudaStream_t> stream;
   cudaEvent_t startEvent;
   cudaEvent_t stopEvent;
 };

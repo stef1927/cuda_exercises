@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "argparse.hpp"
+#include "cpp_utils.h"
 #include "cuda_utils.h"
 
 namespace cg = cooperative_groups;
@@ -76,14 +77,11 @@ std::vector<int> generateInputData(int size) {
 }
 
 unsigned long long reduceCpu(const std::vector<int>& inputData) {
-  auto start = std::chrono::high_resolution_clock::now();
+  Timer timer("reduce on the CPU");
   unsigned long long sum = 0;
   for (int i = 0; i < inputData.size(); i++) {
     sum += inputData[i];
   }
-  auto stop = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double, std::milli> cpuDuration = (stop - start);
-  printf("Time to reduce on CPU: %f ms\n", cpuDuration.count());
   return sum;
 }
 
@@ -193,26 +191,21 @@ int main(int argc, char* argv[]) {
   const unsigned long long cpuResult = reduceCpu(inputData);
   unsigned long long gpuResult = 0;
 
-  cudaCheck(cudaHostRegister((void*)inputData.data(), args.size * sizeof(int), cudaHostRegisterDefault));
-  int* d_inputData = nullptr;
-  cudaCheck(cudaMalloc((void**)&d_inputData, args.size * sizeof(int)));
-  cudaCheck(cudaMemcpy(d_inputData, inputData.data(), args.size * sizeof(int), cudaMemcpyHostToDevice));
-  unsigned long long* d_outputData = nullptr;
-  cudaCheck(cudaMalloc((void**)&d_outputData, sizeof(unsigned long long)));
+  {
+    Timer timer("reduce on the GPU");
+    auto d_inputData = make_cuda_unique<int>(args.size);
+    auto d_outputData = make_cuda_unique<unsigned long long>(1);
+    cudaCheck(cudaHostRegister((void*)inputData.data(), args.size * sizeof(int), cudaHostRegisterDefault));
+    cudaCheck(cudaMemcpy(d_inputData.get(), inputData.data(), args.size * sizeof(int), cudaMemcpyHostToDevice));
 
-  cudaEvent_t startEvent, stopEvent;
-  cudaCheck(cudaEventCreate(&startEvent));
-  cudaCheck(cudaEventCreate(&stopEvent));
-  cudaCheck(cudaEventRecord(startEvent, 0));
-  runKernel(d_inputData, d_outputData, args);
-  cudaCheck(cudaEventRecord(stopEvent, 0));
-  cudaCheck(cudaEventSynchronize(stopEvent));
-  float gpuExecutionTime = 0;
-  cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
-  printf("Time to execute on GPU: %f ms\n", gpuExecutionTime);
-  cudaCheck(cudaDeviceSynchronize());
+    {
+      CudaEventRecorder recorder("reduce on the GPU");
+      runKernel(d_inputData.get(), d_outputData.get(), args);
+      cudaCheck(cudaDeviceSynchronize());
+    }
 
-  cudaCheck(cudaMemcpy(&gpuResult, d_outputData, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    cudaCheck(cudaMemcpy(&gpuResult, d_outputData.get(), sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+  }
   printf("GPU result: %llu\n", gpuResult);
   printf("CPU result: %llu\n", cpuResult);
   printf("Difference: %llu\n", gpuResult > cpuResult ? gpuResult - cpuResult : cpuResult - gpuResult);
