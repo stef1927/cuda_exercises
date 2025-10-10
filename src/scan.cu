@@ -77,49 +77,36 @@ std::vector<int> cpu_inclusive_scan(const std::vector<int>& input_data) {
 std::vector<int> cub_inclusive_scan(const std::vector<int>& input_data) {
   Timer timer("inclusive_scan on the GPU using the CUB library");
   std::vector<int> output_data_gpu(input_data.size());
-  cudaStream_t stream;
-  cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  cudaEvent_t startEvent, stopEvent;
-  cudaCheck(cudaEventCreate(&startEvent));
-  cudaCheck(cudaEventCreate(&stopEvent));
+  CudaStream streamWrapper;
+  cudaStream_t stream = streamWrapper.stream;
 
-  void* d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-  int* d_input_data = nullptr;
-  cudaCheck(cudaMalloc((void**)&d_input_data, input_data.size() * sizeof(int)));
-  int* d_output_data = nullptr;
-  cudaCheck(cudaMalloc((void**)&d_output_data, input_data.size() * sizeof(int)));
+  auto d_input_data = make_cuda_unique<int>(input_data.size());
+  auto d_output_data = make_cuda_unique<int>(input_data.size());
 
   // Copy input data to device
-  cudaCheck(cudaMemcpyAsync(d_input_data, input_data.data(), input_data.size() * sizeof(int), cudaMemcpyHostToDevice,
-                            stream));
+  cudaCheck(cudaMemcpyAsync(d_input_data.get(), input_data.data(), input_data.size() * sizeof(int),
+                            cudaMemcpyHostToDevice, stream));
 
-  cudaCheck(cudaEventRecord(startEvent, stream));
+  {
+    CudaEventRecorder recorder = streamWrapper.record("inclusive_scan on the GPU using the CUB library");
 
-  // Determine temporary device storage requirements
-  cudaCheck(cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_input_data, d_output_data,
-                                          input_data.size(), stream));
+    // Determine temporary device storage requirements
+    size_t temp_storage_bytes = 0;
+    cudaCheck(cub::DeviceScan::InclusiveSum(nullptr, temp_storage_bytes, d_input_data.get(), d_output_data.get(),
+                                            input_data.size(), stream));
 
-  // Allocate temporary storage
-  cudaCheck(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+    // Allocate temporary storage
+    auto d_temp_storage = make_cuda_unique<char>(temp_storage_bytes);
 
-  // Run exclusive prefix sum
-  cudaCheck(cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_input_data, d_output_data,
-                                          input_data.size(), stream));
-  cudaCheck(cudaEventRecord(stopEvent, stream));
-  cudaCheck(cudaEventSynchronize(stopEvent));
-  float gpuExecutionTime = 0;
-  cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
-  printf("GPU time taken to perform inclusive scan on GPU using the CUB library: %f ms\n", gpuExecutionTime);
-  cudaCheck(cudaMemcpyAsync(output_data_gpu.data(), d_output_data, input_data.size() * sizeof(int),
+    // Run exclusive prefix sum
+    cudaCheck(cub::DeviceScan::InclusiveSum(d_temp_storage.get(), temp_storage_bytes, d_input_data.get(),
+                                            d_output_data.get(), input_data.size(), stream));
+  }
+
+  cudaCheck(cudaMemcpyAsync(output_data_gpu.data(), d_output_data.get(), input_data.size() * sizeof(int),
                             cudaMemcpyDeviceToHost, stream));
+  cudaCheck(cudaStreamSynchronize(stream));
 
-  cudaCheck(cudaFree(d_temp_storage));
-  cudaCheck(cudaFree(d_input_data));
-  cudaCheck(cudaFree(d_output_data));
-  cudaCheck(cudaEventDestroy(startEvent));
-  cudaCheck(cudaEventDestroy(stopEvent));
-  cudaCheck(cudaStreamDestroy(stream));
   return output_data_gpu;
 }
 
