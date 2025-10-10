@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "argparse.hpp"
+#include "cpp_utils.h"
 #include "cuda_utils.h"
 
 struct Args {
@@ -67,13 +68,21 @@ bool verify_result(std::vector<int>& output_data_cpu, std::vector<int>& output_d
 }
 
 std::vector<int> cpu_inclusive_scan(const std::vector<int>& input_data) {
+  Timer timer("inclusive_scan on the CPU");
   std::vector<int> output_data(input_data.size());
   std::inclusive_scan(input_data.begin(), input_data.end(), output_data.begin());
   return output_data;
 }
 
-std::vector<int> cub_inclusive_scan(const std::vector<int>& input_data, cudaStream_t stream) {
+std::vector<int> cub_inclusive_scan(const std::vector<int>& input_data) {
+  Timer timer("inclusive_scan on the GPU using the CUB library");
   std::vector<int> output_data_gpu(input_data.size());
+  cudaStream_t stream;
+  cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  cudaEvent_t startEvent, stopEvent;
+  cudaCheck(cudaEventCreate(&startEvent));
+  cudaCheck(cudaEventCreate(&stopEvent));
+
   void* d_temp_storage = nullptr;
   size_t temp_storage_bytes = 0;
   int* d_input_data = nullptr;
@@ -85,6 +94,8 @@ std::vector<int> cub_inclusive_scan(const std::vector<int>& input_data, cudaStre
   cudaCheck(cudaMemcpyAsync(d_input_data, input_data.data(), input_data.size() * sizeof(int), cudaMemcpyHostToDevice,
                             stream));
 
+  cudaCheck(cudaEventRecord(startEvent, stream));
+
   // Determine temporary device storage requirements
   cudaCheck(cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_input_data, d_output_data,
                                           input_data.size(), stream));
@@ -95,13 +106,20 @@ std::vector<int> cub_inclusive_scan(const std::vector<int>& input_data, cudaStre
   // Run exclusive prefix sum
   cudaCheck(cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, d_input_data, d_output_data,
                                           input_data.size(), stream));
-
+  cudaCheck(cudaEventRecord(stopEvent, stream));
+  cudaCheck(cudaEventSynchronize(stopEvent));
+  float gpuExecutionTime = 0;
+  cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
+  printf("GPU time taken to perform inclusive scan on GPU using the CUB library: %f ms\n", gpuExecutionTime);
   cudaCheck(cudaMemcpyAsync(output_data_gpu.data(), d_output_data, input_data.size() * sizeof(int),
                             cudaMemcpyDeviceToHost, stream));
 
   cudaCheck(cudaFree(d_temp_storage));
   cudaCheck(cudaFree(d_input_data));
   cudaCheck(cudaFree(d_output_data));
+  cudaCheck(cudaEventDestroy(startEvent));
+  cudaCheck(cudaEventDestroy(stopEvent));
+  cudaCheck(cudaStreamDestroy(stream));
   return output_data_gpu;
 }
 
@@ -112,24 +130,12 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // Run inclusive scan on CPU and report time elapsed
+  // Run inclusive scan on CPU
   const std::vector<int> input_data = generate_input_data(args.size);
-  std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
   std::vector<int> output_data_cpu = cpu_inclusive_scan(input_data);
-  std::chrono::high_resolution_clock::time_point stop = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double, std::milli> cpuDuration = (stop - start);
-  printf("Time to calculate inclusive scan on CPU: %f ms\n", cpuDuration.count());
 
-  // Run inclusive scan on GPU using the CUB libraryand report time elapsed
-  std::chrono::high_resolution_clock::time_point start_gpu = std::chrono::high_resolution_clock::now();
-  cudaStream_t stream;
-  cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  std::vector<int> output_data_gpu = cub_inclusive_scan(input_data, stream);
-  cudaCheck(cudaStreamSynchronize(stream));
-  cudaCheck(cudaStreamDestroy(stream));
-  std::chrono::high_resolution_clock::time_point stop_gpu = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double, std::milli> gpuDuration = (stop_gpu - start_gpu);
-  printf("Time to calculate inclusive scan on GPU: %f ms\n", gpuDuration.count());
+  // Run inclusive scan on GPU using the CUB library
+  std::vector<int> output_data_gpu = cub_inclusive_scan(input_data);
 
   // Verify results
   bool result = verify_result(output_data_cpu, output_data_gpu);
