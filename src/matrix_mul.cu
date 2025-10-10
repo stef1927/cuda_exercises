@@ -7,6 +7,7 @@
 #include <random>
 
 #include "argparse.hpp"
+#include "cpp_utils.h"
 #include "cuda_utils.h"
 #include "matrix.h"
 
@@ -26,6 +27,7 @@ struct Args {
 
 template <Numeric T>
 void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>& C) {
+  Timer timer("matrix multiplication on CPU");
   for (int row = 0; row < A.get_height(); row++) {
     for (int col = 0; col < B.get_width(); col++) {
       T sum = 0.0;
@@ -85,15 +87,13 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, Devic
 
 template <Numeric T>
 float run_kernel(KernelType kernelType, DeviceMatrix<T>& dA, DeviceMatrix<T>& dB, DeviceMatrix<T>& dC,
-                 cudaStream_t stream, int block_size) {
-  cudaEvent_t startEvent, stopEvent;
-  cudaCheck(cudaEventCreate(&startEvent));
-  cudaCheck(cudaEventCreate(&stopEvent));
+                 CudaStream& streamWrapper, int block_size) {
+  cudaStream_t stream = streamWrapper.stream;
+  CudaEventRecorder recorder = streamWrapper.record("matrix multiplication on GPU");
 
   dim3 dimBlock(block_size, block_size);
   dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x, (dB.height + dimBlock.y - 1) / dimBlock.y);
 
-  cudaCheck(cudaEventRecord(startEvent, stream));
   if (kernelType == KernelType::NAIVE) {
     matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
   } else if (kernelType == KernelType::TILED) {
@@ -103,12 +103,8 @@ float run_kernel(KernelType kernelType, DeviceMatrix<T>& dA, DeviceMatrix<T>& dB
     throw std::runtime_error("Invalid kernel type");
   }
   cudaCheck(cudaGetLastError());
-  cudaCheck(cudaEventRecord(stopEvent, stream));
-  cudaCheck(cudaEventSynchronize(stopEvent));
 
-  float gpuExecutionTime = 0;
-  cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
-  return gpuExecutionTime;
+  return recorder.close();
 }
 
 int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
@@ -207,22 +203,22 @@ int main(int argc, char* argv[]) {
   // B.print_row("B", 0);
 
   printf("Initializing device matrices\n");
-  cudaStream_t stream;
-  cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  CudaStream streamWrapper;
+  cudaStream_t stream = streamWrapper.stream;
 
   DeviceMatrix<bf16> dA = A.to_device_async(stream);
   DeviceMatrix<bf16> dB = B.to_device_async(stream);
   DeviceMatrix<bf16> dC = C.to_device_async(stream);
 
   // warm up
-  run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
+  run_kernel<bf16>(args.kernel_type, dA, dB, dC, streamWrapper, args.block_size);
   cudaCheck(cudaStreamSynchronize(stream));
 
   // measure
   if (args.num_runs > 0) {
     float matrixMulTimeMsec = 0;
     for (int i = 0; i < args.num_runs; i++) {
-      float time = run_kernel<bf16>(args.kernel_type, dA, dB, dC, stream, args.block_size);
+      float time = run_kernel<bf16>(args.kernel_type, dA, dB, dC, streamWrapper, args.block_size);
       matrixMulTimeMsec += time;
     }
     matrixMulTimeMsec /= args.num_runs;
@@ -249,7 +245,6 @@ int main(int argc, char* argv[]) {
   dC.close(stream);
   dA.close(stream);
   dB.close(stream);
-  cudaCheck(cudaStreamDestroy(stream));
   A.close();
   B.close();
   C.close();

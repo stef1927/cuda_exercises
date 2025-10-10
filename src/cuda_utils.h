@@ -50,21 +50,28 @@ inline cudaDeviceProp getDeviceProperties(int dev = 0, bool print = true) {
 class CudaEventRecorder {
  public:
   CudaEventRecorder(const char* operation_name, cuda::std::optional<cudaStream_t> stream = nullptr)
-      : operation_name(operation_name), stream(stream) {
+      : operation_name(operation_name), stream(stream), closed(false) {
     cudaCheck(cudaEventCreate(&startEvent));
     cudaCheck(cudaEventCreate(&stopEvent));
     cudaCheck(cudaEventRecord(startEvent, stream.value_or(nullptr)));
   }
 
-  ~CudaEventRecorder() {
-    cudaCheck(cudaEventRecord(stopEvent, stream.value_or(nullptr)));
-    cudaCheck(cudaEventSynchronize(stopEvent));
-    float gpuExecutionTime = 0;
-    cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
-    printf("GPU time taken to perform %s: %f ms\n", operation_name, gpuExecutionTime);
-    cudaCheck(cudaEventDestroy(startEvent));
-    cudaCheck(cudaEventDestroy(stopEvent));
+  float close() {
+    if (!closed) {
+      closed = true;
+      cudaCheck(cudaEventRecord(stopEvent, stream.value_or(nullptr)));
+      cudaCheck(cudaEventSynchronize(stopEvent));
+      float gpuExecutionTime = 0;
+      cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
+      printf("GPU time taken to perform %s: %f ms\n", operation_name, gpuExecutionTime);
+      cudaCheck(cudaEventDestroy(startEvent));
+      cudaCheck(cudaEventDestroy(stopEvent));
+      return gpuExecutionTime;
+    }
+    return 0;
   }
+
+  ~CudaEventRecorder() { close(); }
 
   CudaEventRecorder(const CudaEventRecorder&) = delete;
   CudaEventRecorder& operator=(const CudaEventRecorder&) = delete;
@@ -72,10 +79,12 @@ class CudaEventRecorder {
   CudaEventRecorder(CudaEventRecorder&& other) noexcept {
     operation_name = other.operation_name;
     stream = other.stream;
+    closed = other.closed;
     startEvent = other.startEvent;
     stopEvent = other.stopEvent;
     other.operation_name = nullptr;
     other.stream = nullptr;
+    other.closed = false;
     other.startEvent = nullptr;
     other.stopEvent = nullptr;
   }
@@ -84,10 +93,12 @@ class CudaEventRecorder {
     if (this != &other) {
       operation_name = other.operation_name;
       stream = other.stream;
+      closed = other.closed;
       startEvent = other.startEvent;
       stopEvent = other.stopEvent;
       other.operation_name = nullptr;
       other.stream = nullptr;
+      other.closed = false;
       other.startEvent = nullptr;
       other.stopEvent = nullptr;
     }
@@ -96,6 +107,7 @@ class CudaEventRecorder {
 
  private:
   const char* operation_name;
+  bool closed;
   cuda::std::optional<cudaStream_t> stream;
   cudaEvent_t startEvent;
   cudaEvent_t stopEvent;
