@@ -3,9 +3,11 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <memory>
 #include <random>
 
 #include "argparse.hpp"
+#include "cpp_utils.h"
 #include "cuda_utils.h"
 
 struct Args {
@@ -52,9 +54,10 @@ int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
 
 // Allocate the memory and calculates the histogram on the CPU as a reference
 // check for correctness
-unsigned int* getHistogramCpu(unsigned char* inputData, int byte_count) {
-  unsigned int* hHistogramCPU = new unsigned int[NUM_BINS];
-  memset(hHistogramCPU, 0, NUM_BINS * sizeof(unsigned int));
+std::unique_ptr<unsigned int[]> getHistogramCpu(const std::unique_ptr<unsigned char[]>& inputData, int byte_count) {
+  Timer timer("calculate histogram on CPU");
+  std::unique_ptr<unsigned int[]> hHistogramCPU = std::make_unique<unsigned int[]>(NUM_BINS);
+  memset(hHistogramCPU.get(), 0, NUM_BINS * sizeof(unsigned int));
 
   auto start = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < byte_count; i++) {
@@ -68,8 +71,8 @@ unsigned int* getHistogramCpu(unsigned char* inputData, int byte_count) {
 
 // Allocate the memory and generate the input data using a uniform distribution
 // from 0 to 255
-unsigned char* generateInputData(int byte_count) {
-  unsigned char* inputData = new unsigned char[byte_count];
+std::unique_ptr<unsigned char[]> generateInputData(int byte_count) {
+  std::unique_ptr<unsigned char[]> inputData = std::make_unique<unsigned char[]>(byte_count);
   std::default_random_engine generator(786);
   std::uniform_int_distribution<unsigned char> distribution(0, 255);
   for (int i = 0; i < byte_count; i++) {
@@ -78,7 +81,8 @@ unsigned char* generateInputData(int byte_count) {
   return inputData;
 }
 
-bool verifyHistogram(unsigned int* histogramCPU, unsigned int* histogramGPU) {
+bool verifyHistogram(const std::unique_ptr<unsigned int[]>& histogramCPU,
+                     const std::unique_ptr<unsigned int[]>& histogramGPU) {
   for (int i = 0; i < NUM_BINS; i++) {
     if (histogramCPU[i] != histogramGPU[i]) {
       printf("Histogram mismatch at index %d: should: %d, is: %d\n", i, histogramCPU[i], histogramGPU[i]);
@@ -155,50 +159,29 @@ int main(int argc, char* argv[]) {
   }
 
   // Allocate host memory and perform initializations and CPU calculations
-  unsigned char* inputData = generateInputData(args.byte_count);
-  unsigned int* histogramCPU = getHistogramCpu(inputData, args.byte_count);
-  unsigned int* histogramGPU = new unsigned int[NUM_BINS];
-  cudaCheck(cudaHostRegister((void*)inputData, args.byte_count * sizeof(unsigned char), cudaHostRegisterDefault));
+  auto inputData = generateInputData(args.byte_count);
+  auto histogramCPU = getHistogramCpu(inputData, args.byte_count);
+  auto histogramGPU = std::make_unique<unsigned int[]>(NUM_BINS);
+  cudaCheck(cudaHostRegister((void*)inputData.get(), args.byte_count * sizeof(unsigned char), cudaHostRegisterDefault));
 
-  // Create a stream, the events, and allocate device memory
-  cudaStream_t stream;
-  cudaCheck(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  cudaEvent_t startEvent, stopEvent;
-  cudaCheck(cudaEventCreate(&startEvent));
-  cudaCheck(cudaEventCreate(&stopEvent));
-  unsigned char* d_inputData = nullptr;
-  unsigned int* d_histogramGPU = nullptr;
-  cudaCheck(cudaMallocAsync((void**)&d_inputData, args.byte_count * sizeof(unsigned char), stream));
-  cudaCheck(cudaMallocAsync((void**)&d_histogramGPU, NUM_BINS * sizeof(uint), stream));
-  printf("Calculate histogram on GPU\n");
+  CudaStream streamWrapper;
+  cudaStream_t stream = streamWrapper.stream;
 
-  cudaCheck(cudaEventRecord(startEvent, stream));
-  cudaCheck(cudaMemcpyAsync(d_inputData, inputData, args.byte_count, cudaMemcpyHostToDevice, stream));
-  launchKernel(d_inputData, d_histogramGPU, args, stream);
+  auto d_inputData = make_cuda_unique<unsigned char>(args.byte_count);
+  auto d_histogramGPU = make_cuda_unique<unsigned int>(NUM_BINS);
+  {
+    Timer timer("calculate histogram on GPU");
+    cudaCheck(cudaMemcpyAsync(d_inputData.get(), inputData.get(), args.byte_count, cudaMemcpyHostToDevice, stream));
 
-  cudaCheck(cudaMemcpyAsync(histogramGPU, d_histogramGPU, NUM_BINS * sizeof(uint), cudaMemcpyDeviceToHost, stream));
-  cudaCheck(cudaEventRecord(stopEvent, stream));
-  cudaCheck(cudaEventSynchronize(stopEvent));
-  cudaCheck(cudaStreamSynchronize(stream));
-  float gpuExecutionTime = 0;
-  cudaCheck(cudaEventElapsedTime(&gpuExecutionTime, startEvent, stopEvent));
-  printf(
-      "Time to calculate histogram on GPU: %f ms, throuput %f MB/s, size %d "
-      "MB\n",
-      gpuExecutionTime, 1e-06 * args.byte_count / gpuExecutionTime, args.byte_count / ONE_MB);
+    {
+      CudaEventRecorder recorder = streamWrapper.record("calculate histogram on GPU");
+      printf("Calculate histogram on GPU\n");
+      launchKernel(d_inputData.get(), d_histogramGPU.get(), args, stream);
+    }
 
-  bool isVerified = verifyHistogram(histogramCPU, histogramGPU);
-
-  cudaCheck(cudaFreeAsync(d_inputData, stream));
-  cudaCheck(cudaFreeAsync(d_histogramGPU, stream));
-
-  cudaCheck(cudaEventDestroy(startEvent));
-  cudaCheck(cudaEventDestroy(stopEvent));
-  cudaCheck(cudaStreamDestroy(stream));
-
-  delete[] inputData;
-  delete[] histogramCPU;
-  delete[] histogramGPU;
-
-  return isVerified ? 0 : 1;
+    cudaCheck(cudaMemcpyAsync(histogramGPU.get(), d_histogramGPU.get(), NUM_BINS * sizeof(uint), cudaMemcpyDeviceToHost,
+                              stream));
+    cudaCheck(cudaStreamSynchronize(stream));
+  }
+  return verifyHistogram(histogramCPU, histogramGPU) ? 0 : 1;
 }
