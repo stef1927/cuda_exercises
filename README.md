@@ -54,4 +54,6 @@ reduction over a warp tile group.
 
 ## Scan
 
-Performs an inclusive prefix scan (sum) using the implementation from the CUB library, and compares it to a sequential CPU implementation.
+Performs an inclusive prefix scan (sum) using the implementation from the CUB library, and a kernel using the CTA collective functions
+to scan individual warps with the hardware accelerated function, then reduce warps in a block to scan the entire block, and reduce block
+sums to scan an arbitrarily long array.
