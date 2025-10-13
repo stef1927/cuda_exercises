@@ -142,13 +142,13 @@ std::vector<int> cpu_inclusive_scan(const std::vector<int>& input_data) {
 // A kernel that demonstrates the use of the CTA built-in functions to perform an inclusive scan:
 // Each warp will call inclusive_scan() as documented in the CUDA C++ programming guide:
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#inclusive-scan-and-exclusive-scan
-// This will assign a value to each thread which is correct within the warp. The value of thelast thread
+// This will assign a value to each thread which is correct within the warp. The value of the last thread
 // of each warp will contain the warp sum, which is saved in shared memory. At this point, the first warp
 // will scan the warp sums from shared memory and update shared memory so that shared memory will contain
-// a scan of all the warp sums, which are added to the value of each thread except those in the first scan
-// and used to update the output array. In addition the sum of the block (the last warp sum or the value
+// a scan of all the warp sums, which are added to the value of each thread except those in the first warp
+// and used to update the output array. In addition, the sum of the block (the last warp sum or the value
 // of the last thread) will be passed into the block sums array if it is not null. This will be used by
-// the callers to scan the block sums, refer to the calling function for more details.
+// the caller to scan the block sums, refer to the calling function for more details.
 __global__ void cta_functions_inclusive_scan_kernel(int* d_input_data, int* d_output_data, int size,
                                                     int* d_block_sums = nullptr) {
   extern __shared__ unsigned int sdata[];  // partial sums of each warp, one per warp in the block
@@ -159,11 +159,11 @@ __global__ void cta_functions_inclusive_scan_kernel(int* d_input_data, int* d_ou
   auto warp_id = thread_block.thread_index().x / WARP_SIZE;
   auto lane_id = thread_block.thread_index().x % WARP_SIZE;
 
-  // First scan each block using the CTA built-int function
+  // First scan each warp tile using the CTA built-int function
   int input_val = (tid < size) ? d_input_data[tid] : 0;
   unsigned int output_val = cg::inclusive_scan(warp, input_val);
 
-  // Make the last thread of each warp write the warp sums to shared memory
+  // Make the last thread of each warp write the warp sum to shared memory
   if (lane_id == WARP_SIZE - 1) {
     sdata[warp_id] = output_val;
   }
@@ -182,7 +182,8 @@ __global__ void cta_functions_inclusive_scan_kernel(int* d_input_data, int* d_ou
 
   thread_block.sync();
 
-  // perform a uniform add across the warps
+  // Now that shared memory contains the increments of each warp, perform a uniform add across the warps:
+  // except for the first one, add the sum of the previous warp to all the output values and update the output array
   int block_sum = 0;
   if (warp_id > 0) {
     block_sum = sdata[warp_id - 1];
@@ -193,7 +194,8 @@ __global__ void cta_functions_inclusive_scan_kernel(int* d_input_data, int* d_ou
   if (tid < size)
     d_output_data[tid] = output_val;
 
-  // for later, if a block sums device array is passed in, then save the block sum to the array
+  // If a block sums device array is passed in, then save the block sum to the array, this is either the sum
+  // of the last warp from shared memory or the value of the last thread in the block
   if (d_block_sums != nullptr && thread_block.thread_index().x == thread_block.group_dim().x - 1) {
     d_block_sums[thread_block.group_index().x] = output_val;
   }
@@ -201,12 +203,14 @@ __global__ void cta_functions_inclusive_scan_kernel(int* d_input_data, int* d_ou
 
 
 // This is a simple kernel that adds the block sum to all values in a block, refer to the calling function
-// for more details.
+// for more details. Here d_output_data points to the first block (index 1), whilst d_block_sums contains 
+// the sums of the blocks starting at block with index zero.
 __global__ void uniform_add_kernel(int* d_output_data, int size, int* d_block_sums) {
   __shared__ int block_sum;
   auto thread_block = cg::this_thread_block();
   auto tid = thread_block.group_index().x * thread_block.group_dim().x + thread_block.thread_index().x;
 
+  // only the first thread loads the value from device memory since all threads use the same value
   if (thread_block.thread_index().x == 0) {
     block_sum = d_block_sums[thread_block.group_index().x];
   }
@@ -251,15 +255,14 @@ void cta_functions_inclusive_scan(CudaStream& streamWrapper, CudaUniquePtr<int>&
   // Reduce the block sums using the same kernel if it fits in a single block, otherwise calls this function recursively
   if (dimGrid.x <= dimBlock.x) {
     dim3 dimGridSums((dimGrid.x + dimBlock.x - 1) / dimBlock.x);
-    printf("Running CTA functions inclusive scan kernel 2 with %d blocks and %d threads per block\n", dimGridSums.x,
-           dimBlock.x);
+    if (debug_print) {
+      printf("Running CTA functions inclusive scan kernel 2 with %d blocks and %d threads per block\n", dimGridSums.x,
+             dimBlock.x);
+    }
     cta_functions_inclusive_scan_kernel<<<dimGridSums, dimBlock, shared_mem_size, stream>>>(
         d_block_sums.get(), d_block_sums.get(), dimGrid.x, nullptr);
 
     if (debug_print) {
-      printf("Running CTA functions inclusive scan kernel 2 with %d blocks and %d threads per block\n", dimGridSums.x,
-             dimBlock.x);
-
       std::vector<int> h_block_sums(dimGrid.x);
       cudaCheck(cudaMemcpyAsync(h_block_sums.data(), d_block_sums.get(), dimGrid.x * sizeof(int),
                                 cudaMemcpyDeviceToHost, stream));
@@ -285,6 +288,7 @@ void cta_functions_inclusive_scan(CudaStream& streamWrapper, CudaUniquePtr<int>&
 }
 
 
+// Use the CUB library inclusive sum function
 void cub_inclusive_scan(CudaStream& streamWrapper, CudaUniquePtr<int>& d_input_data, CudaUniquePtr<int>& d_output_data,
                         int size) {
   cudaStream_t stream = streamWrapper.stream;
