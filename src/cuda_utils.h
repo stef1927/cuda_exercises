@@ -154,10 +154,14 @@ template <Numeric T>
 using CudaUniquePtr = std::unique_ptr<T, CudaDeleter>;
 
 template <Numeric T>
-CudaUniquePtr<T> make_cuda_unique(size_t count = 1) {
+CudaUniquePtr<T> make_cuda_unique(size_t count = 1, bool managed = false) {
   T* ptr = nullptr;
   if (count > 0) {
-    cudaCheck(cudaMalloc(&ptr, count * sizeof(T)));
+    if (managed) {
+      cudaCheck(cudaMallocManaged(&ptr, count * sizeof(T)));
+    } else {
+      cudaCheck(cudaMalloc(&ptr, count * sizeof(T)));
+    }
   }
   return CudaUniquePtr<T>(ptr);
 }

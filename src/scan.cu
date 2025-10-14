@@ -203,7 +203,7 @@ __global__ void cta_functions_inclusive_scan_kernel(int* d_input_data, int* d_ou
 
 
 // This is a simple kernel that adds the block sum to all values in a block, refer to the calling function
-// for more details. Here d_output_data points to the first block (index 1), whilst d_block_sums contains 
+// for more details. Here d_output_data points to the first block (index 1), whilst d_block_sums contains
 // the sums of the blocks starting at block with index zero.
 __global__ void uniform_add_kernel(int* d_output_data, int size, int* d_block_sums) {
   __shared__ int block_sum;

@@ -34,8 +34,15 @@ scan: $(SRC_DIR)/scan.cu
 scan_profile: $(OUTPUT_DIR)/scan
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^
 
+stream_compaction: $(SRC_DIR)/stream_compaction.cu
+	$(NVCC) -o $(OUTPUT_FILE) $^
+
+stream_compaction_profile: $(OUTPUT_DIR)/stream_compaction
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+
 clean:
 	rm -f $(OUTPUT_DIR)/matrix_mul
 	rm -f $(OUTPUT_DIR)/histogram
 	rm -f $(OUTPUT_DIR)/reduction
 	rm -f $(OUTPUT_DIR)/scan
+	rm -f $(OUTPUT_DIR)/stream_compaction
