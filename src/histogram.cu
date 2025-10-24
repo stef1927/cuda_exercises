@@ -59,13 +59,10 @@ std::unique_ptr<unsigned int[]> getHistogramCpu(const std::unique_ptr<unsigned c
   std::unique_ptr<unsigned int[]> hHistogramCPU = std::make_unique<unsigned int[]>(NUM_BINS);
   memset(hHistogramCPU.get(), 0, NUM_BINS * sizeof(unsigned int));
 
-  auto start = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < byte_count; i++) {
     hHistogramCPU[inputData[i]]++;
   }
-  auto stop = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double, std::milli> cpuDuration = (stop - start);
-  printf("Time to calculate histogram on CPU: %f ms\n", cpuDuration.count());
+
   return hHistogramCPU;
 }
 
