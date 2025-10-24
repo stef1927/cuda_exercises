@@ -112,29 +112,34 @@ std::vector<int> compact_stream_cpu_parallel_stl(int* input_data, size_t size, s
 }
 
 
-// This runs in parallel on the CPU using OpenMP
+// This runs in parallel on the CPU using OpenMP.
+// TODO - fuse the 3 blocks together and optimize it further.
 std::vector<int> compact_stream_cpu_parallel_omp(int* input_data, size_t size, std::function<bool(int)> predicate,
                                                  int block_size) {
   Timer timer("compact_stream_cpu_parallel_omp");
   std::vector<int> output_data_indicators(size);
-  int i;
+  std::vector<int> output_data_indicators_prefix_sum(size);
+  unsigned int sum = 0;
 
-
-#pragma omp parallel for schedule(static, block_size) default(shared), private(i)
-  for (i = 0; i < size; i++) {
+#pragma omp parallel for schedule(static, block_size) default(shared)
+  for (int i = 0; i < size; i++) {
     output_data_indicators[i] = predicate(input_data[i]) ? 1 : 0;
   }
 
-  // TODO - we need to implement this with OMP too, and we need to fuse the 3 blocks if possible
-  std::inclusive_scan(std::execution::par, output_data_indicators.begin(), output_data_indicators.end(),
-                      output_data_indicators.begin());
-  auto output_size = output_data_indicators.back();
+#pragma omp parallel for simd reduction(inscan, + : sum)
+  for (int i = 0; i < size; i++) {
+    sum += output_data_indicators[i];
+#pragma omp scan inclusive(sum)
+    output_data_indicators_prefix_sum[i] = sum;
+  }
+
+  auto output_size = output_data_indicators_prefix_sum.back();
   std::vector<int> output_data(output_size);
 
-#pragma omp parallel for schedule(static, block_size) default(shared), private(i)
-  for (i = 0; i < size; i++) {
+#pragma omp parallel for schedule(static, block_size) default(shared)
+  for (int i = 0; i < size; i++) {
     if (predicate(input_data[i])) {
-      output_data[output_data_indicators[i] - 1] = input_data[i];
+      output_data[output_data_indicators_prefix_sum[i] - 1] = input_data[i];
     }
   }
   return output_data;
