@@ -1,6 +1,7 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <omp.h>
 
 #include <cassert>
 #include <cstdlib>
@@ -84,10 +85,10 @@ std::vector<int> compact_stream_cpu_serial(int* input_data, size_t size, std::fu
   return output_data;
 }
 
-// This runs in parallel on the CPU but we could make it run on the GPU too by installing the HPC SDK
-// and compiling with nvc++ and stdpar=gpu: nvc++ -std=c++20 -stdpar=gpu -O3
-std::vector<int> compact_stream_cpu_parallel(int* input_data, size_t size, std::function<bool(int)> predicate) {
-  Timer timer("compact_stream_cpu_parallel");
+// This runs in parallel on the CPU using the STL, which by default uses OpenMP as well, but we could make it run
+// on the GPU too by installing the HPC SDK and compiling with nvc++ and stdpar=gpu: nvc++ -std=c++20 -stdpar=gpu -O3
+std::vector<int> compact_stream_cpu_parallel_stl(int* input_data, size_t size, std::function<bool(int)> predicate) {
+  Timer timer("compact_stream_cpu_parallel_stl");
   // Create a vector of 0 or 1 depending on predicate result
   std::vector<int> output_data_indicators(size);
   std::transform(std::execution::par, input_data, input_data + size, output_data_indicators.begin(),
@@ -107,6 +108,35 @@ std::vector<int> compact_stream_cpu_parallel(int* input_data, size_t size, std::
                     output_data[index - 1] = input_data[i];
                   }
                 });
+  return output_data;
+}
+
+
+// This runs in parallel on the CPU using OpenMP
+std::vector<int> compact_stream_cpu_parallel_omp(int* input_data, size_t size, std::function<bool(int)> predicate,
+                                                 int block_size) {
+  Timer timer("compact_stream_cpu_parallel_omp");
+  std::vector<int> output_data_indicators(size);
+  int i;
+
+
+#pragma omp parallel for schedule(static, block_size) default(shared), private(i)
+  for (i = 0; i < size; i++) {
+    output_data_indicators[i] = predicate(input_data[i]) ? 1 : 0;
+  }
+
+  // TODO - we need to implement this with OMP too, and we need to fuse the 3 blocks if possible
+  std::inclusive_scan(std::execution::par, output_data_indicators.begin(), output_data_indicators.end(),
+                      output_data_indicators.begin());
+  auto output_size = output_data_indicators.back();
+  std::vector<int> output_data(output_size);
+
+#pragma omp parallel for schedule(static, block_size) default(shared), private(i)
+  for (i = 0; i < size; i++) {
+    if (predicate(input_data[i])) {
+      output_data[output_data_indicators[i] - 1] = input_data[i];
+    }
+  }
   return output_data;
 }
 
@@ -181,7 +211,7 @@ void create_output_data(CudaStream& streamWrapper, int* input_data, int* input_d
 // - The second pass runs an inclusive scan on the output data of the first pass using the CUB library
 // - The third pass runs a kernel that copies the input data to the output data based on the indexes
 // and output sizefrom the second pass
-// TODO - is it possible to reduce it to 2 passes or use dynamic parallelism  or graphs to avoid the kernel launches?
+// TODO - we need to fuse the 3 kernels, calling CUB directly from the device code
 template <typename Predicate>
 std::vector<int> compact_stream_gpu(int* input_data, size_t size, Predicate predicate, int block_size) {
   Timer timer("compact_stream_gpu");
@@ -199,7 +229,11 @@ std::vector<int> compact_stream_gpu(int* input_data, size_t size, Predicate pred
   create_output_data(streamWrapper, input_data, input_data_indicators.get(), d_output_data.get(), size, block_size,
                      predicate);
 
-  cudaCheck(cudaMemcpy(output_data.data(), d_output_data.get(), output_size * sizeof(int), cudaMemcpyDeviceToHost));
+  cudaCheck(cudaMemcpyAsync(output_data.data(), d_output_data.get(), output_size * sizeof(int), cudaMemcpyDeviceToHost,
+                            stream));
+  cudaCheck(cudaStreamSynchronize(stream));
+  cudaCheck(cudaGetLastError());
+  cudaCheck(cudaDeviceSynchronize());
   return output_data;
 }
 
@@ -209,23 +243,29 @@ int main(int argc, char* argv[]) {
   if (parse_args(argc, argv, args, deviceProp) != 0) {
     return 1;
   }
+  auto predicate = [](int x) -> bool { return x % 2 == 0; };
   auto input_data = generate_input_data(args.size);
-  auto output_data_cpu_serial =
-      compact_stream_cpu_serial(input_data.get(), args.size, [](int x) { return x % 2 == 0; });
-  auto output_data_cpu_parallelizable =
-      compact_stream_cpu_parallel(input_data.get(), args.size, [](int x) { return x % 2 == 0; });
+  auto output_data_cpu_serial = compact_stream_cpu_serial(input_data.get(), args.size, predicate);
+  auto output_data_cpu_parallel_stl = compact_stream_cpu_parallel_stl(input_data.get(), args.size, predicate);
+  auto output_data_cpu_parallel_omp =
+      compact_stream_cpu_parallel_omp(input_data.get(), args.size, predicate, args.block_size);
+
   if (args.debug_print) {
     print_vector("Input data", input_data.get(), args.size);
     print_vector("Output data CPU serial", output_data_cpu_serial);
-    print_vector("Output data CPU parallelizable", output_data_cpu_parallelizable);
+    print_vector("Output data CPU parallel STL", output_data_cpu_parallel_stl);
+    print_vector("Output data CPU parallel OMP", output_data_cpu_parallel_omp);
   }
 
-  bool result = verify_result(output_data_cpu_serial.data(), output_data_cpu_parallelizable.data(),
-                              output_data_cpu_serial.size());
-  printf("CPU results match: %s\n", result ? "true" : "false");
+  bool result =
+      verify_result(output_data_cpu_serial.data(), output_data_cpu_parallel_stl.data(), output_data_cpu_serial.size());
+  printf("CPU serial and parallel STL results match: %s\n", result ? "true" : "false");
+  result =
+      verify_result(output_data_cpu_serial.data(), output_data_cpu_parallel_omp.data(), output_data_cpu_serial.size());
+  printf("CPU serial and parallel OMP results match: %s\n", result ? "true" : "false");
 
-  auto predicate = [] __device__(int x) { return x % 2 == 0; };
-  auto output_data_gpu = compact_stream_gpu(input_data.get(), args.size, predicate, args.block_size);
+  auto predicate_gpu = [] __device__(int x) { return x % 2 == 0; };
+  auto output_data_gpu = compact_stream_gpu(input_data.get(), args.size, predicate_gpu, args.block_size);
   if (args.debug_print) {
     print_vector("Output data GPU", output_data_gpu);
   }

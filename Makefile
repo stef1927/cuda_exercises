@@ -2,6 +2,7 @@ NVCCC_FLAGS = -w -Wno-deprecated-gpu-targets --std=c++20 -O3 -DNDEBUG
 NVCC_LDFLAGS = -lcuda
 NVCC = nvcc $(NVCCC_FLAGS) $(NVCC_LDFLAGS) -lineinfo
 NCU = ncu --set full --import-source yes -f --page details
+NSYS = nsys profile --trace=cuda,nvtx,osrt --gpu-metrics-device=all -o profile_report
 NVC++ = nvc++ -std=c++20 -stdpar=gpu -O3  # not yet in use
 
 SRC_DIR = ./src
@@ -36,7 +37,7 @@ scan_profile: $(OUTPUT_DIR)/scan
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^
 
 stream_compaction: $(SRC_DIR)/stream_compaction.cu
-	$(NVCC) --extended-lambda -o $(OUTPUT_FILE) $^
+	$(NVCC) --extended-lambda -Xcompiler -fopenmp -o $(OUTPUT_FILE) $^
 
 stream_compaction_profile: $(OUTPUT_DIR)/stream_compaction
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^
