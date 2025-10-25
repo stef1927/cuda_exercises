@@ -1,6 +1,6 @@
 CompileFlags:
   Add:
-    - "-I/usr/local/cuda-12.6/include"
+    - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include"
     - "--cuda-path=/usr/local/cuda-12.6"
     - "-xcuda"
     - "--cuda-gpu-arch=sm_89"
