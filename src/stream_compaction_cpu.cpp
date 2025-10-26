@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <execution>
 #include <functional>
+#include <numeric>
 #include <ranges>
 #include <vector>
 
@@ -56,22 +57,21 @@ std::vector<int> compact_stream_cpu_parallel_stl(const std::vector<int>& input_d
                                                  std::function<bool(int)> predicate) {
   NVTXScopedRange fn("compact_stream_cpu_parallel_stl");
   Timer timer("compact_stream_cpu_parallel_stl");
-  // Create a vector of 0 or 1 depending on predicate result
-  std::vector<int> output_data_indicators(input_data.size());
-  std::transform(std::execution::par, input_data.begin(), input_data.end(), output_data_indicators.begin(),
-                 [predicate](int x) { return predicate(x) ? 1 : 0; });
+  std::vector<int> input_data_prefix_sums(input_data.size());
 
-  // Run an inclusive scan, when the sum changes, that's the index of the next element to copy, the last index is the
+  // Run an inclusive scan after applying the predicate.
+  // When the sum changes, that's the index of the next element to copy, the last index is the
   // size of the output data
-  std::inclusive_scan(std::execution::par, output_data_indicators.begin(), output_data_indicators.end(),
-                      output_data_indicators.begin());
+  std::transform_inclusive_scan(std::execution::par, input_data.begin(), input_data.end(),
+                                input_data_prefix_sums.begin(), std::plus<int>(),
+                                [predicate](int x) { return predicate(x) ? 1 : 0; });
 
-  std::vector<int> output_data(output_data_indicators.back());
+  std::vector<int> output_data(input_data_prefix_sums.back());
   auto indexes = std::views::iota((size_t)0, input_data.size());
   std::for_each(std::execution::par, indexes.begin(), indexes.end(),
-                [predicate, input_data, output_data_indicators, &output_data](size_t i) {
+                [predicate, input_data, input_data_prefix_sums, &output_data](size_t i) {
                   if (predicate(input_data[i])) {
-                    int index = output_data_indicators[i];
+                    int index = input_data_prefix_sums[i];
                     output_data[index - 1] = input_data[i];
                   }
                 });
