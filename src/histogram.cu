@@ -7,8 +7,8 @@
 #include <random>
 
 #include "argparse.hpp"
-#include "cpp_utils.h"
-#include "cuda_utils.h"
+#include "cpp_utils.hpp"
+#include "cuda_utils.cuh"
 
 struct Args {
   int byte_count;

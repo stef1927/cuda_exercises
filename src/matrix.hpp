@@ -10,7 +10,7 @@
 #include <random>
 #include <stdexcept>
 
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 // Forward declaration of DeviceMatrix
 template <Numeric T>

@@ -1,7 +1,18 @@
+# NVIDIA HPC SDK base: /opt/nvidia/hpc_sdk/Linux_x86_64/25.9
+If:
+  PathMatch: .*\.(cu|cuh)$
 CompileFlags:
   Add:
     - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include"
-    - "--cuda-path=/usr/local/cuda-12.6"
+    - "--cuda-path=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0"
     - "-xcuda"
     - "--cuda-gpu-arch=sm_89"
+    - "-std=c++20"
+---
+If:
+  PathMatch: .*\.(cpp|hpp|h)$
+CompileFlags:
+  Add:
+    - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include"
+    - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/compilers/include"
     - "-std=c++20"

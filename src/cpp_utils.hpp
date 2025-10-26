@@ -1,9 +1,12 @@
 #ifndef CUDA_EXERCISES_CPP_UTILS_H
 #define CUDA_EXERCISES_CPP_UTILS_H
 
+#include <nvtx3/nvToolsExt.h>
 #include <stdio.h>
 
 #include <chrono>
+#include <string>
+#include <vector>
 
 class Timer {
  public:
@@ -33,5 +36,14 @@ inline void print_vector(const char* name, const int* output_data, size_t size) 
 inline void print_vector(const char* name, const std::vector<int>& output_data) {
   return print_vector(name, output_data.data(), output_data.size());
 }
+
+class NVTXScopedRange {
+ public:
+  NVTXScopedRange(const std::string& name) : name(name) { nvtxRangePushA(name.c_str()); }
+  ~NVTXScopedRange() { nvtxRangePop(); }
+
+ private:
+  std::string name;
+};
 
 #endif

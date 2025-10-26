@@ -1,7 +1,7 @@
 CUDA_INCLUDE = -I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include
 
 NVC++_FLAGS = -std=c++20 -stdpar=multicore -O2 -mp=ompt $(CUDA_INCLUDE)
-NVC++ = nvc++ $(NVC++_FLAGS)
+NVC++ = nvc++ $(NVC++_FLAGS) -ldl
 
 NVCCC_FLAGS = -w -Wno-deprecated-gpu-targets --std=c++20 -O3 -DNDEBUG $(CUDA_INCLUDE)
 NVCC = nvcc $(NVCCC_FLAGS) $(NVCC_LDFLAGS) -lcuda -lineinfo
@@ -58,6 +58,8 @@ stream_compaction_gpu_profile: $(OUTPUT_DIR)/stream_compaction_gpu
 
 stream_compaction_gpu_nsys: $(OUTPUT_DIR)/stream_compaction_gpu
 	$(NSYS) -o $(NSYS_OUTPUT_FILE) $^
+
+all: matrix_mul histogram reduction scan stream_compaction_cpu stream_compaction_gpu
 
 clean:
 	rm -f $(OUTPUT_DIR)/matrix_mul

@@ -1,19 +1,16 @@
-
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <nvtx3/nvToolsExt.h>
 
 #include <cassert>
 #include <cstdlib>
 #include <cub/cub.cuh>  // or equivalently <cub/device/device_scan.cuh>
-#include <functional>
 #include <random>
 #include <vector>
 
 #include "argparse.hpp"
-#include "cpp_utils.h"
-#include "cuda_utils.h"
-#include "stream_compaction_utils.h"
+#include "cpp_utils.hpp"
+#include "cuda_utils.cuh"
+#include "stream_compaction_utils.hpp"
 
 
 struct Args {
@@ -56,7 +53,7 @@ int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
 
 // Generate input data with CUDA unified memory
 CudaUniquePtr<int> generate_input_data_cuda(int size) {
-  nvtx3::scoped_range fn("generate_input_data_cuda");
+  NVTXScopedRange fn("generate_input_data_cuda");
   auto input_data = make_cuda_unique<int>(size, true);
   std::default_random_engine generator(786);
   std::uniform_int_distribution<int> distribution(0, 100);
@@ -140,7 +137,7 @@ void create_output_data(CudaStream& streamWrapper, int* input_data, int* input_d
 // TODO - we need to fuse the 3 kernels, calling CUB directly from the device code
 template <typename Predicate>
 std::vector<int> compact_stream_gpu(int* input_data, size_t size, Predicate predicate, int block_size) {
-  nvtx3::scoped_range fn("compact_stream_gpu");
+  NVTXScopedRange fn("compact_stream_gpu");
   Timer timer("compact_stream_gpu");
   CudaStream streamWrapper;
   cudaStream_t stream = streamWrapper.stream;
@@ -165,7 +162,7 @@ std::vector<int> compact_stream_gpu(int* input_data, size_t size, Predicate pred
 }
 
 int main(int argc, char* argv[]) {
-  nvtx3::scoped_range fn("main");
+  NVTXScopedRange fn("main");
   Args args;
   cudaDeviceProp deviceProp = getDeviceProperties(0, true);
   if (parse_args(argc, argv, args, deviceProp) != 0) {

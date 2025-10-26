@@ -7,9 +7,9 @@
 #include <random>
 
 #include "argparse.hpp"
-#include "cpp_utils.h"
-#include "cuda_utils.h"
-#include "matrix.h"
+#include "cpp_utils.hpp"
+#include "cuda_utils.cuh"
+#include "matrix.hpp"
 
 typedef __nv_bfloat16 bf16;
 
