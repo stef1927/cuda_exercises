@@ -100,20 +100,18 @@ void add_sum_of_previous_chunk(unsigned long long sum, std::vector<int>& output_
   }
 }
 
-
+template <typename Predicate>
 void generate_output_data_omp_chunk(const std::vector<int>& input_data, std::vector<int>& output_data,
-                                    std::vector<int>& output_data_indexes, int start_index, int end_index) {
+                                    std::vector<int>& output_data_indexes, int start_index, int end_index,
+                                    Predicate predicate) {
   NVTXScopedRange fn("generate_output_data_omp_chunk");
 
-  int prev = start_index > 0 ? output_data_indexes[start_index - 1] : 0;
   for (int i = start_index; i < end_index; i++) {
-    if (output_data_indexes[i] > prev) {
+    if (predicate(input_data[i])) {
       output_data[output_data_indexes[i] - 1] = input_data[i];
-      prev = output_data_indexes[i];
     }
   }
 }
-
 // This runs in parallel with all shared data
 template <typename Predicate>
 void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector<int>& output_data,
@@ -142,22 +140,16 @@ void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector
     for (int i = 1; i < sums.size(); i++) {
       sums[i] += sums[i - 1];
     }
+    output_data.resize(sums.back());
   }
-#pragma omp barrier
 
+#pragma omp barrier
 
   if (tid > 0) {
     add_sum_of_previous_chunk(sums[tid - 1], output_data_indexes, start_index, end_index);
   }
-#pragma omp barrier
 
-#pragma omp master
-  {
-    output_data.resize(sums.back());
-  }
-#pragma omp barrier
-
-  generate_output_data_omp_chunk(input_data, output_data, output_data_indexes, start_index, end_index);
+  generate_output_data_omp_chunk(input_data, output_data, output_data_indexes, start_index, end_index, predicate);
 }
 
 template <typename Predicate>
