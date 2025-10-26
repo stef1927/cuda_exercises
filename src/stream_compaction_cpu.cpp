@@ -102,21 +102,23 @@ void add_sum_of_previous_chunk(unsigned long long sum, std::vector<int>& output_
 
 
 void generate_output_data_omp_chunk(const std::vector<int>& input_data, std::vector<int>& output_data,
-                                    std::vector<int>& output_data_prefix_sum, int start_index, int end_index,
-                                    std::function<bool(int)> predicate) {
+                                    std::vector<int>& output_data_indexes, int start_index, int end_index) {
   NVTXScopedRange fn("generate_output_data_omp_chunk");
 
+  int prev = start_index > 0 ? output_data_indexes[start_index - 1] : 0;
   for (int i = start_index; i < end_index; i++) {
-    if (predicate(input_data[i])) {
-      output_data[output_data_prefix_sum[i] - 1] = input_data[i];
+    if (output_data_indexes[i] > prev) {
+      output_data[output_data_indexes[i] - 1] = input_data[i];
+      prev = output_data_indexes[i];
     }
   }
 }
 
 // This runs in parallel with all shared data
+template <typename Predicate>
 void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector<int>& output_data,
                                  std::vector<int>& output_data_indexes, std::vector<unsigned long long>& sums,
-                                 std::function<bool(int)> predicate) {
+                                 Predicate predicate) {
   NVTXScopedRange fn("compact_stream_omp_parallel");
 
   int tid = omp_get_thread_num();
@@ -155,23 +157,25 @@ void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector
   }
 #pragma omp barrier
 
-  generate_output_data_omp_chunk(input_data, output_data, output_data_indexes, start_index, end_index, predicate);
+  generate_output_data_omp_chunk(input_data, output_data, output_data_indexes, start_index, end_index);
 }
 
-std::vector<int> compact_stream_omp(const std::vector<int>& input_data, std::function<bool(int)> predicate) {
+template <typename Predicate>
+std::vector<int> compact_stream_omp(const std::vector<int>& input_data, Predicate predicate) {
   NVTXScopedRange fn("compact_stream_omp");
   Timer timer("compact_stream_omp");
   int num_threads = omp_get_num_procs();
   std::vector<int> output_data;
   std::vector<int> output_data_indexes(input_data.size());
   std::vector<unsigned long long> sums(num_threads);
+  output_data.reserve(input_data.size() / 2);
 
   if (input_data.size() == 0) {
     throw std::invalid_argument("Input data is empty");
   }
 
 #pragma omp parallel default(shared) num_threads(num_threads)
-  compact_stream_omp_parallel(input_data, output_data, output_data_indexes, sums, predicate);
+  compact_stream_omp_parallel<Predicate>(input_data, output_data, output_data_indexes, sums, predicate);
 
   return output_data;
 }

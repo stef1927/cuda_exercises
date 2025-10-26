@@ -1,6 +1,6 @@
 CUDA_INCLUDE = -I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include
 
-NVC++_FLAGS = -std=c++20 -stdpar=multicore -O3 -mp=ompt $(CUDA_INCLUDE)
+NVC++_FLAGS = -std=c++20 -stdpar=multicore -O3 -gopt -mp=ompt $(CUDA_INCLUDE)
 NVC++ = nvc++ $(NVC++_FLAGS) -ldl
 
 NVCCC_FLAGS = -w -Wno-deprecated-gpu-targets --std=c++20 -O3 -DNDEBUG $(CUDA_INCLUDE)
@@ -8,6 +8,7 @@ NVCC = nvcc $(NVCCC_FLAGS) $(NVCC_LDFLAGS) -lcuda -lineinfo
 
 NCU = ncu --set full --import-source yes -f --page details
 NSYS = nsys profile --trace=cuda,nvtx,osrt,openmp --sample=cpu --cpuctxsw=process-tree --force-overwrite true
+VTUNE = vtune -collect hotspots
 
 SRC_DIR = ./src
 OUTPUT_DIR = ./build
@@ -52,6 +53,9 @@ stream_compaction_gpu: $(SRC_DIR)/stream_compaction_gpu.cu $(SRC_DIR)/stream_com
 
 stream_compaction_cpu_nsys: $(OUTPUT_DIR)/stream_compaction_cpu
 	$(NSYS) -o ~/reports/$@ $^
+
+stream_compaction_cpu_vtune: $(OUTPUT_DIR)/stream_compaction_cpu
+	$(VTUNE) -r  ~/reports/$@ $^
 
 stream_compaction_gpu_profile: $(OUTPUT_DIR)/stream_compaction_gpu
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^
