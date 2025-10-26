@@ -14,7 +14,7 @@
 
 struct Args {
   int size;
-  int omp_chunk_size;  // OpenMP chunk size
+  int chunk_size;
   bool debug_print;
 };
 
@@ -26,11 +26,11 @@ int parse_args(int argc, char* argv[], Args& args) {
       .scan<'i', int>()
       .default_value(1 << 24)
       .store_into(args.size);
-  program.add_argument("--omp-chunk-size")
+  program.add_argument("--chunk-size")
       .help("The chunk size")
       .scan<'i', int>()
       .default_value(1024 * 1024)
-      .store_into(args.omp_chunk_size);
+      .store_into(args.chunk_size);
   program.add_argument("--debug-print")
       .help("Whether to print debug information")
       .default_value(false)
@@ -45,7 +45,7 @@ int parse_args(int argc, char* argv[], Args& args) {
 
   printf("Arguments:\n");
   printf("  Size: %d\n", args.size);
-  printf("  OMP chunk size: %d\n", args.omp_chunk_size);
+  printf("  Chunk size: %d\n", args.chunk_size);
   return 0;
 }
 
@@ -79,42 +79,104 @@ std::vector<int> compact_stream_cpu_parallel_stl(const std::vector<int>& input_d
 }
 
 
-// This runs in parallel on the CPU using OpenMP.
-// TODO - fuse the 3 blocks together and optimize it further.
-std::vector<int> compact_stream_cpu_parallel_omp(const std::vector<int>& input_data, std::function<bool(int)> predicate,
-                                                 int chunk_size) {
-  NVTXScopedRange fn("compact_stream_cpu_parallel_omp");
-  Timer timer("compact_stream_cpu_parallel_omp");
-  std::vector<int> output_data_indicators(input_data.size());
-  std::vector<int> output_data;
+unsigned long long prefix_sum_with_pred_omp_chunk(const std::vector<int>& input_data, std::vector<int>& output_data,
+                                                  std::function<bool(int)> predicate, int chunk_size) {
+  NVTXScopedRange fn("prefix_sum_with_pred_omp_chunk");
+  int tid = omp_get_thread_num();
+  int num_threads = omp_get_num_threads();
+  int start_index = tid * chunk_size;
+  int end_index = (tid == num_threads - 1) ? input_data.size() : start_index + chunk_size;
+
+  if (start_index >= input_data.size() || end_index > input_data.size()) {
+    throw std::invalid_argument("Parameters out of range");
+  }
+
+  unsigned long long sum = 0;
+  for (int i = start_index; i < end_index; i++) {
+    if (predicate(input_data[i])) {
+      ++sum;
+    }
+    output_data[i] = sum;
+  }
+  return sum;
+}
+
+void add_sum_of_previous_chunk(unsigned long long sum, std::vector<int>& output_data, int tid, int chunk_size) {
+  NVTXScopedRange fn("add_sum_of_previous_chunk");
+  int num_threads = omp_get_num_threads();
+  int start_index = tid * chunk_size;
+  int end_index = (tid == num_threads - 1) ? output_data.size() : start_index + chunk_size;
+
+  if (start_index >= output_data.size() || end_index > output_data.size()) {
+    throw std::invalid_argument("Parameters out of range");
+  }
+
+  for (int i = start_index; i < end_index; i++) {
+    output_data[i] += sum;
+  }
+}
+
+
+void prefix_sum_with_pred_omp(const std::vector<int>& input_data, std::vector<int>& output_data,
+                              std::function<bool(int)> predicate) {
+  NVTXScopedRange fn("prefix_sum_omp");
+
+  if (input_data.size() == 0) {
+    throw std::invalid_argument("Input data is empty");
+  }
+
+  // use the number of processors on the machine as the number of threads in the parallel regions
+  int num_threads = omp_get_num_procs();
+  int chunk_size = input_data.size() / num_threads;
+  auto sums = std::vector<unsigned long long>(num_threads);
+
+#pragma omp parallel default(shared) num_threads(num_threads)
+  {
+    int tid = omp_get_thread_num();
+    sums[tid] = prefix_sum_with_pred_omp_chunk(input_data, output_data, predicate, chunk_size);
+  }  // implicit barrier here
 
   {
-    NVTXScopedRange create_indicators("create_indicators");
-#pragma omp parallel for schedule(static, chunk_size) default(shared)
-    for (int i = 0; i < input_data.size(); i++) {
-      output_data_indicators[i] = predicate(input_data[i]) ? 1 : 0;
+    NVTXScopedRange fn("scan_sums");
+    // scan the sum, sequential for now
+    for (int i = 1; i < sums.size(); i++) {
+      sums[i] += sums[i - 1];
     }
   }
 
+#pragma omp parallel default(shared) num_threads(num_threads)
   {
-    NVTXScopedRange inclusive_scan("inclusive_scan");
-    std::inclusive_scan(std::execution::par, output_data_indicators.begin(), output_data_indicators.end(),
-                        output_data_indicators.begin());
+    int tid = omp_get_thread_num();
+    if (tid > 0) {
+      add_sum_of_previous_chunk(sums[tid - 1], output_data, tid, chunk_size);
+    }
+  }  // implicit barrier here
+}
 
-    auto output_size = output_data_indicators.back();
-    output_data.resize(output_size);
-  }
 
-  {
-    NVTXScopedRange compact_output("compact_output");
+std::vector<int> generate_output_data_omp(const std::vector<int>& input_data, std::vector<int>& output_data_prefix_sum,
+                                          std::function<bool(int)> predicate) {
+  NVTXScopedRange compact_output("generate_output_data_omp");
+  std::vector<int> output_data(output_data_prefix_sum.back());
+  int num_threads = omp_get_num_procs();
+  int chunk_size = input_data.size() / num_threads;
+
 #pragma omp parallel for schedule(static, chunk_size) default(shared)
-    for (int i = 0; i < input_data.size(); i++) {
-      if (predicate(input_data[i])) {
-        output_data[output_data_indicators[i] - 1] = input_data[i];
-      }
+  for (int i = 0; i < input_data.size(); i++) {
+    if (predicate(input_data[i])) {
+      output_data[output_data_prefix_sum[i] - 1] = input_data[i];
     }
   }
   return output_data;
+}
+
+std::vector<int> compact_stream_cpu_parallel_omp(const std::vector<int>& input_data,
+                                                 std::function<bool(int)> predicate) {
+  NVTXScopedRange fn("compact_stream_cpu_parallel_omp");
+  Timer timer("compact_stream_cpu_parallel_omp");
+  std::vector<int> output_data_prefix_sum(input_data.size());
+  prefix_sum_with_pred_omp(input_data, output_data_prefix_sum, predicate);
+  return generate_output_data_omp(input_data, output_data_prefix_sum, predicate);
 }
 
 
@@ -128,7 +190,7 @@ int main(int argc, char* argv[]) {
   auto input_data = generate_input_data(args.size);
   auto output_data_cpu_serial = compact_stream_cpu_serial(input_data.data(), args.size, predicate);
   auto output_data_cpu_parallel_stl = compact_stream_cpu_parallel_stl(input_data, predicate);
-  auto output_data_cpu_parallel_omp = compact_stream_cpu_parallel_omp(input_data, predicate, args.omp_chunk_size);
+  auto output_data_cpu_parallel_omp = compact_stream_cpu_parallel_omp(input_data, predicate);
 
   if (args.debug_print) {
     print_vector("Input data", input_data.data(), args.size);

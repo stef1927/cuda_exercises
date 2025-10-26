@@ -25,7 +25,8 @@ class Timer {
   std::chrono::duration<double, std::milli> duration;
 };
 
-inline void print_vector(const char* name, const int* output_data, size_t size) {
+template <typename T>
+inline void print_vector(const char* name, const T* output_data, size_t size) {
   printf("%s: [", name);
   for (size_t i = 0; i < size; i++) {
     printf("%d ", output_data[i]);
@@ -33,7 +34,8 @@ inline void print_vector(const char* name, const int* output_data, size_t size) 
   printf("]\n");
 }
 
-inline void print_vector(const char* name, const std::vector<int>& output_data) {
+template <typename T>
+inline void print_vector(const char* name, const std::vector<T>& output_data) {
   return print_vector(name, output_data.data(), output_data.size());
 }
 
