@@ -9,7 +9,7 @@
 #include "argparse.hpp"
 #include "cpp_utils.hpp"
 #include "cuda_utils.cuh"
-#include "matrix.hpp"
+#include "matrix_mul_gpu.cuh"
 
 typedef __nv_bfloat16 bf16;
 

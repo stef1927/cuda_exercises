@@ -18,23 +18,20 @@ REPORTS_OUTPUT_DIR = ~/reports
 NCU_OUTPUT_FILE = $(REPORTS_OUTPUT_DIR)/$@
 NSYS_OUTPUT_FILE = $(REPORTS_OUTPUT_DIR)/$@
 
-matrix_mul: $(SRC_DIR)/matrix_mul.cu
+matrix_mul_gpu: $(SRC_DIR)/matrix_mul_gpu.cu
 	$(NVCC) -o $(OUTPUT_FILE) $^
 
-matrix_mul_profile: $(OUTPUT_DIR)/matrix_mul
+matrix_mul_gpu_profile: $(OUTPUT_DIR)/matrix_mul_gpu
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^ --num-runs=1
 
-histogram: $(SRC_DIR)/histogram.cu
-	$(NVCC) -o $(OUTPUT_FILE) $^
+matrix_mul_cpu: $(SRC_DIR)/matrix_mul_cpu.cpp
+	$(NVC++) -o $(OUTPUT_FILE) $^
 
-histogram_profile: $(OUTPUT_DIR)/histogram
-	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+matrix_mul_cpu_vtune: $(OUTPUT_DIR)/matrix_mul_cpu
+	$(VTUNE) -r $(REPORTS_OUTPUT_DIR)/$@ $^
 
-reduction: $(SRC_DIR)/reduction.cu
-	$(NVCC) -o $(OUTPUT_FILE) $^
-
-reduction_profile: $(OUTPUT_DIR)/reduction
-	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+matrix_mul_cpu_nsys: $(OUTPUT_DIR)/matrix_mul_cpu
+	$(NSYS) -o $(REPORTS_OUTPUT_DIR)/$@ $^
 
 scan: $(SRC_DIR)/scan.cu
 	$(NVCC) -o $(OUTPUT_FILE) $^
@@ -52,10 +49,10 @@ stream_compaction_gpu: $(SRC_DIR)/stream_compaction_gpu.cu $(SRC_DIR)/stream_com
 	$(NVCC) --extended-lambda -o $(OUTPUT_FILE) $^
 
 stream_compaction_cpu_nsys: $(OUTPUT_DIR)/stream_compaction_cpu
-	$(NSYS) -o ~/reports/$@ $^
+	$(NSYS) -o $(REPORTS_OUTPUT_DIR)/$@ $^
 
 stream_compaction_cpu_vtune: $(OUTPUT_DIR)/stream_compaction_cpu
-	$(VTUNE) -r  ~/reports/$@ $^
+	$(VTUNE) -r $(REPORTS_OUTPUT_DIR)/$@ $^
 
 stream_compaction_gpu_profile: $(OUTPUT_DIR)/stream_compaction_gpu
 	$(NCU) -o $(NCU_OUTPUT_FILE) $^

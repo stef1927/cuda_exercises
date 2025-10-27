@@ -1,5 +1,5 @@
-#ifndef CUDA_EXERCISES_MATRIX_H
-#define CUDA_EXERCISES_MATRIX_H
+#ifndef CUDA_EXERCISES_MATRIX_MUL_GPU_H
+#define CUDA_EXERCISES_MATRIX_MUL_GPU_H
 
 #include <cuda.h>
 #include <cuda_bf16.h>
@@ -210,4 +210,4 @@ class DeviceMatrix {
   T* data;
 };
 
-#endif  // CUDA_EXERCISES_MATRIX_H
+#endif  // CUDA_EXERCISES_MATRIX_MUL_GPU_H
