@@ -8,8 +8,28 @@
 template <typename T>
 concept Numeric = std::integral<T> || std::floating_point<T>;
 
+// Layout policy tags (inspired by CUTLASS)
+struct RowMajor {
+  static constexpr const char* name = "RowMajor";
 
-template <Numeric T>
+  static inline int offset(int row, int col, int width, int height) { return row * width + col; }
+
+  static inline int stride(int width, int height) {
+    return width;  // Leading dimension
+  }
+};
+
+struct ColumnMajor {
+  static constexpr const char* name = "ColumnMajor";
+
+  static inline int offset(int row, int col, int width, int height) { return col * height + row; }
+
+  static inline int stride(int width, int height) {
+    return height;  // Leading dimension
+  }
+};
+
+template <Numeric T, typename Layout = RowMajor>
 class Matrix {
  public:
   explicit Matrix(int width, int height) : width(width), height(height) { data.resize(width * height); }
@@ -29,78 +49,92 @@ class Matrix {
     return *this;
   }
 
-  Matrix(Matrix&& other) : width(other.width), height(other.height), data(other.data) {
-    other.data = nullptr;
+  Matrix(Matrix&& other) noexcept : width(other.width), height(other.height), data(std::move(other.data)) {
     other.width = 0;
     other.height = 0;
+    other.data.clear();
   }
 
-  Matrix& operator=(Matrix&& other) {
+  Matrix& operator=(Matrix&& other) noexcept {
     if (this != &other) {
       width = other.width;
       height = other.height;
-      data = other.data;
-      other.data = nullptr;
+      data = std::move(other.data);
       other.width = 0;
       other.height = 0;
+      other.data.clear();
     }
     return *this;
   }
 
 
-  int get_width() const { return width; }
-  int get_height() const { return height; }
-  T* get_data() { return data; }
-  const T* get_data() const { return data; }
-  int get_size() const { return width * height; }
+  inline int get_width() const { return width; }
+  inline int get_height() const { return height; }
+
+  inline int size() const { return width * height; }
 
   void randomize(std::default_random_engine& generator) {
     std::uniform_real_distribution<float> distribution(-10.0f, 10.0f);
-    for (int i = 0; i < get_size(); i++) {
+    for (int i = 0; i < size(); i++) {
       float val = distribution(generator);
       data[i] = static_cast<T>(val);
     }
   }
 
-  bool verify(const Matrix<T>& other, float tolerance = 0.1) const {
-    for (int i = 0; i < get_size(); i++) {
-      float a = static_cast<float>(data[i]);
-      float b = static_cast<float>(other.data[i]);
-      float diff = std::fabs(a - b);
-      if (diff > tolerance) {
-        printf("Divergence! Should %5.2f, Is %5.2f (Diff %5.2f) at [%d,%d]\n", b, a, diff, i / width, i % width);
-        return false;
+  bool verify(const Matrix<T, Layout>& other, float tolerance = 0.1) const {
+    for (int row = 0; row < height; row++) {
+      for (int col = 0; col < width; col++) {
+        float a = static_cast<float>((*this)(row, col));
+        float b = static_cast<float>(other(row, col));
+        float diff = std::fabs(a - b);
+        if (diff > tolerance) {
+          printf("Divergence! Should %5.2f, Is %5.2f (Diff %5.2f) at [%d,%d]\n", b, a, diff, row, col);
+          return false;
+        }
       }
     }
     printf("Matrix verified successfully\n");
     return true;
   }
 
-  void print_row(const std::string& name, int row) const {
-    printf("%s Row %d: [", name.c_str(), row);
-    for (int i = 0; i < width; i++) {
-      printf("%5.2f ", static_cast<float>(data[row * width + i]));
-    }
-    printf("]\n");
-  }
+  void reset() { std::fill(data.begin(), data.end(), 0); }
 
-  inline T get_value(int row, int col) const {
-    if (row >= 0 && row < height && col >= 0 && col < width) {
-      return data[row * width + col];
-    }
-    return 0;
-  }
+  // intentionally unsafe for performance reasons
+  inline T operator()(int row, int col) const { return data[Layout::offset(row, col, width, height)]; }
 
-  inline void set_value(T val, int row, int col) {
-    if (row >= 0 && row < height && col >= 0 && col < width) {
-      data[row * width + col] = val;
-    }
-  }
+  // intentionally unsafe for performance reasons
+  inline T& operator()(int row, int col) { return data[Layout::offset(row, col, width, height)]; }
+
+  static constexpr const char* layout_name() { return Layout::name; }
 
  private:
   int width;
   int height;
   std::vector<T> data;
 };
+
+
+template <typename T, typename SourceLayout, typename TargetLayout>
+Matrix<T, TargetLayout> convert_layout(const Matrix<T, SourceLayout>& source) {
+  Matrix<T, TargetLayout> result(source.get_width(), source.get_height());
+
+  for (int row = 0; row < source.get_height(); row++) {
+    for (int col = 0; col < source.get_width(); col++) {
+      result(row, col) = source(row, col);
+    }
+  }
+
+  return result;
+}
+
+template <typename T>
+Matrix<T, ColumnMajor> to_column_major(const Matrix<T, RowMajor>& source) {
+  return convert_layout<T, RowMajor, ColumnMajor>(source);
+}
+
+template <typename T>
+Matrix<T, RowMajor> to_row_major(const Matrix<T, ColumnMajor>& source) {
+  return convert_layout<T, ColumnMajor, RowMajor>(source);
+}
 
 #endif  // CUDA_EXERCISES_MATRIX_MUL_CPU_H
