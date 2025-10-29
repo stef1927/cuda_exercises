@@ -12,90 +12,87 @@
 
 #include "cuda_utils.cuh"
 
-// Forward declaration of DeviceMatrix
-template <Numeric T>
-class DeviceMatrix;
 
-template <Numeric T>
+struct HostMemoryAllocator {
+  static constexpr const char* name = "HostMemoryAllocator";
+
+  static inline void* allocate(size_t size, cudaStream_t stream = nullptr) {
+    void* ptr = nullptr;
+    cudaCheck(cudaMallocHost(&ptr, size));
+    memset(ptr, 0, size);
+    return ptr;
+  }
+
+  static inline void deallocate(void* ptr, cudaStream_t stream = nullptr) { cudaCheck(cudaFreeHost(ptr)); }
+};
+
+
+struct DeviceMemoryAllocator {
+  static constexpr const char* name = "DeviceMemoryAllocator";
+
+  static inline void* allocate(size_t size, cudaStream_t stream = nullptr) {
+    void* ptr = nullptr;
+    cudaCheck(cudaMalloc(&ptr, size));
+    return ptr;
+  }
+
+  static inline void deallocate(void* ptr, cudaStream_t stream = nullptr) { cudaCheck(cudaFree(ptr)); }
+};
+
+
+struct DeviceAsyncMemoryAllocator {
+  static constexpr const char* name = "DeviceAsyncMemoryAllocator";
+
+  static inline void* allocate(size_t size, cudaStream_t stream = nullptr) {
+    void* ptr = nullptr;
+    cudaCheck(cudaMallocAsync(&ptr, size, stream));
+    return ptr;
+  }
+
+  static inline void deallocate(void* ptr, cudaStream_t stream) { cudaCheck(cudaFreeAsync(ptr, stream)); }
+};
+
+struct NoAllocator {
+  static constexpr const char* name = "NoAllocator";
+
+  static inline void* allocate(size_t size, cudaStream_t stream = nullptr) {
+    throw std::runtime_error("NoAllocator does not allocate memory");
+  }
+
+  static inline void deallocate(void* ptr, cudaStream_t stream = nullptr) {  // no-op, memory was borrowed}
+  };
+};
+
+
+template <Numeric T, typename MemoryAllocator = HostMemoryAllocator>
 class HostMatrix {
  public:
-  explicit HostMatrix(int width, int height) : width(width), height(height) { allocate(); }
-
-  ~HostMatrix() { deallocate(); }
-
-  void close() { deallocate(); }
-
-  HostMatrix(const HostMatrix& other) : width(other.width), height(other.height) {
-    allocate();
-    cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T), cudaMemcpyHostToHost));
+  explicit HostMatrix(int width, int height) : width(width), height(height) {
+    data = (T*)MemoryAllocator::allocate(size() * sizeof(T));
   }
 
-  HostMatrix& operator=(const HostMatrix& other) {
-    if (this != &other) {
-      maybe_reallocate(other.width, other.height);
-      cudaCheck(cudaMemcpy(data, other.data, get_size() * sizeof(T), cudaMemcpyHostToHost));
-    }
-    return *this;
-  }
+  ~HostMatrix() { MemoryAllocator::deallocate(data); }
 
-  HostMatrix(HostMatrix&& other) : width(other.width), height(other.height), data(other.data) {
-    other.data = nullptr;
-    other.width = 0;
-    other.height = 0;
-  }
+  HostMatrix(const HostMatrix& other) = delete;
 
-  HostMatrix& operator=(HostMatrix&& other) {
-    if (this != &other) {
-      deallocate();
-      width = other.width;
-      height = other.height;
-      data = other.data;
-      other.data = nullptr;
-      other.width = 0;
-      other.height = 0;
-    }
-    return *this;
-  }
+  HostMatrix& operator=(const HostMatrix& other) = delete;
 
-  DeviceMatrix<T> to_device_async(cudaStream_t stream) const {
-    if (data == nullptr) {
-      throw std::runtime_error("Cannot copy from a moved-from HostMatrix");
-    }
-    T* device_data = nullptr;
-    cudaCheck(cudaMallocAsync((void**)&device_data, get_size() * sizeof(T), stream));
-    cudaCheck(cudaMemcpyAsync(device_data, data, get_size() * sizeof(T), cudaMemcpyHostToDevice, stream));
-    return DeviceMatrix<T>(width, width, height, device_data);
-  }
+  HostMatrix(HostMatrix&& other) noexcept = default;
 
-  void from_device_async(const DeviceMatrix<T>& other, cudaStream_t stream) {
-    if (other.data == nullptr) {
-      throw std::runtime_error("Cannot copy from a moved-from DeviceMatrix");
-    }
-    if (data == nullptr) {
-      throw std::runtime_error("Cannot copy to a moved-from HostMatrix");
-    }
-    if (width != other.width || height != other.height) {
-      throw std::runtime_error("Cannot copy matrices of different sizes");
-    }
-    cudaCheck(cudaMemcpyAsync(data, other.data, get_size() * sizeof(T), cudaMemcpyDeviceToHost, stream));
-  }
+  HostMatrix& operator=(HostMatrix&& other) noexcept = default;
 
-  int get_width() const { return width; }
-  int get_height() const { return height; }
-  T* get_data() { return data; }
-  const T* get_data() const { return data; }
-  int get_size() const { return width * height; }
+  inline const int size() const { return width * height; }
 
   void randomize(std::default_random_engine& generator) {
     std::uniform_real_distribution<float> distribution(-10.0f, 10.0f);
-    for (int i = 0; i < get_size(); i++) {
+    for (int i = 0; i < size(); i++) {
       float val = distribution(generator);
       data[i] = static_cast<T>(val);
     }
   }
 
-  bool verify(const HostMatrix<T>& other, float tolerance = 0.1) const {
-    for (int i = 0; i < get_size(); i++) {
+  bool verify(const HostMatrix<T, MemoryAllocator>& other, float tolerance = 0.1) const {
+    for (int i = 0; i < size(); i++) {
       float a = static_cast<float>(data[i]);
       float b = static_cast<float>(other.data[i]);
       float diff = std::fabs(a - b);
@@ -108,98 +105,53 @@ class HostMatrix {
     return true;
   }
 
-  void print_row(const std::string& name, int row) const {
-    printf("%s Row %d: [", name.c_str(), row);
-    for (int i = 0; i < width; i++) {
-      printf("%5.2f ", static_cast<float>(data[row * width + i]));
-    }
-    printf("]\n");
-  }
+  // intentionally unsafe for performance reasons
+  inline T& operator()(int row, int col) { return data[row * width + col]; }
 
-  inline T get_value(int row, int col) const {
-    if (row >= 0 && row < height && col >= 0 && col < width) {
-      return data[row * width + col];
-    }
-    return 0;
-  }
+  // intentionally unsafe for performance reasons
+  inline const T& operator()(int row, int col) const { return data[row * width + col]; }
 
-  inline void set_value(T val, int row, int col) {
-    if (row >= 0 && row < height && col >= 0 && col < width) {
-      data[row * width + col] = val;
-    }
-  }
-
- private:
-  void allocate() {
-    cudaCheck(cudaMallocHost((void**)&data, get_size() * sizeof(T)));
-    memset(data, 0, get_size() * sizeof(T));
-  }
-
-  void deallocate() {
-    if (data != nullptr) {
-      cudaCheck(cudaFreeHost(data));
-      data = nullptr;
-    }
-  }
-
-  void maybe_reallocate(int other_width, int other_height) {
-    if (width != other_width || height != other_height) {
-      deallocate();
-      width = other_width;
-      height = other_height;
-      allocate();
-    }
-  }
-
- private:
+ public:
   int width;
   int height;
   T* data;
 };
 
-template <Numeric T>
+template <Numeric T, typename MemoryAllocator = DeviceAsyncMemoryAllocator>
 class DeviceMatrix {
  public:
-  __host__ __device__ DeviceMatrix(int width, int stride, int height, T* data)
-      : width(width), stride(stride), height(height), data(data) {}
+  __host__ DeviceMatrix(int width, int stride, int height, cudaStream_t stream)
+      : width(width), stride(stride), height(height), stream(stream) {
+    data = (T*)MemoryAllocator::allocate(width * height * sizeof(T), stream);
+  }
 
-  __host__ __device__ ~DeviceMatrix() = default;
+  __device__ DeviceMatrix(int width, int stride, int height, T* data)
+      : width(width), stride(stride), height(height), data(data), stream(nullptr) {}
 
-  // Copy operations are forbidden
-  __host__ __device__ DeviceMatrix(const DeviceMatrix&) = default;
-  __host__ __device__ DeviceMatrix& operator=(const DeviceMatrix&) = default;
+  __host__ __device__ ~DeviceMatrix() { MemoryAllocator::deallocate(data, stream); }
+
+  __host__ __device__ DeviceMatrix(const DeviceMatrix& other) = delete;
+  __host__ __device__ DeviceMatrix& operator=(const DeviceMatrix&) = delete;
 
   __host__ __device__ DeviceMatrix(DeviceMatrix&& other) noexcept = default;
   __host__ __device__ DeviceMatrix& operator=(DeviceMatrix&& other) noexcept = default;
 
-  __host__ void close(cudaStream_t stream) {
-    if (data != nullptr) {
-      cudaCheck(cudaFreeAsync(data, stream));
-      data = nullptr;
-    }
-  }
+  DeviceMatrix<T, NoAllocator> copy() const { return DeviceMatrix<T, NoAllocator>(width, stride, height, data); }
 
-  __device__ inline void set_value(T val, int row, int col) {
-    if (row >= 0 && row < height && col >= 0 && col < width) {
-      data[row * stride + col] = val;
-    }
-  }
+  // intentionally unsafe for performance reasons
+  __device__ __host__ inline T& operator()(int row, int col) { return data[row * stride + col]; }
 
-  __device__ inline const T& get_value(int row, int col) const {
-    if (row >= 0 && row < height && col >= 0 && col < width) {
-      return data[row * stride + col];
-    }
-    return 0;
-  }
+  // intentionally unsafe for performance reasons
+  __device__ __host__ inline const T& operator()(int row, int col) const { return data[row * stride + col]; }
 
-  __device__ inline DeviceMatrix<T> get_block(int row, int col, int block_size) const {
+  __device__ __host__ inline DeviceMatrix<T, NoAllocator> get_block(int row, int col, int block_size) const {
     if (row < 0 || col < 0 || row >= height || col >= width) {
-      return DeviceMatrix<T>(0, 0, 0, nullptr);
+      return DeviceMatrix<T, NoAllocator>(0, 0, 0, (T*)nullptr);
     }
     T* block_data = &data[row * block_size * stride + col * block_size];
     int width = block_size <= (width - col) ? block_size : width - col;
     int height = block_size <= (height - row) ? block_size : height - row;
-    DeviceMatrix<T> block(width, stride, height, block_data);
+    DeviceMatrix<T, NoAllocator> block(width, stride, height, block_data);
     return block;
   }
 
@@ -208,6 +160,7 @@ class DeviceMatrix {
   int stride;
   int height;
   T* data;
+  cudaStream_t stream;
 };
 
 #endif  // CUDA_EXERCISES_MATRIX_MUL_GPU_H

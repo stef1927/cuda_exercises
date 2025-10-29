@@ -28,34 +28,36 @@ struct Args {
 template <Numeric T>
 void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>& C) {
   Timer timer("matrix multiplication on CPU");
-  for (int row = 0; row < A.get_height(); row++) {
-    for (int col = 0; col < B.get_width(); col++) {
+  for (int row = 0; row < A.height; row++) {
+    for (int col = 0; col < B.width; col++) {
       T sum = 0.0;
-      for (int k = 0; k < A.get_width(); k++) {
-        sum += A.get_value(row, k) * B.get_value(k, col);
+      for (int k = 0; k < A.width; k++) {
+        sum += A(row, k) * B(k, col);
       }
-      C.set_value(sum, row, col);
+      C(row, col) = sum;
     }
   }
 }
 
 template <Numeric T>
-__global__ void matrixMulNaiveKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, DeviceMatrix<T> C) {
+__global__ void matrixMulNaiveKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatrix<T, NoAllocator> B,
+                                     DeviceMatrix<T, NoAllocator> C) {
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (row < C.height && col < C.width) {
     T sum = 0.0;
     for (int k = 0; k < A.width; ++k) {
-      sum += A.get_value(row, k) * B.get_value(k, col);
+      sum += A(row, k) * B(k, col);
     }
 
-    C.set_value(sum, row, col);
+    C(row, col) = sum;
   }
 }
 
 template <Numeric T>
-__global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, DeviceMatrix<T> C, int block_size) {
+__global__ void matrixMulTiledKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatrix<T, NoAllocator> B,
+                                     DeviceMatrix<T, NoAllocator> C, int block_size) {
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
   const int blockCol = blockIdx.x;
@@ -65,14 +67,14 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, Devic
   T* As = &smem[0];
   T* Bs = &smem[block_size * block_size];
 
-  DeviceMatrix<T> Csub = C.get_block(blockRow, blockCol, block_size);
+  DeviceMatrix<T, NoAllocator> Csub = C.get_block(blockRow, blockCol, block_size);
   T sum = 0.0;
   for (int b = 0; b < (A.width / block_size); ++b) {
-    DeviceMatrix<T> Asub = A.get_block(blockRow, b, block_size);
-    DeviceMatrix<T> Bsub = B.get_block(b, blockCol, block_size);
+    DeviceMatrix<T, NoAllocator> Asub = A.get_block(blockRow, b, block_size);
+    DeviceMatrix<T, NoAllocator> Bsub = B.get_block(b, blockCol, block_size);
 
-    As[row * block_size + col] = Asub.get_value(row, col);
-    Bs[row * block_size + col] = Bsub.get_value(row, col);
+    As[row * block_size + col] = Asub(row, col);
+    Bs[row * block_size + col] = Bsub(row, col);
 
     __syncthreads();
 
@@ -82,11 +84,12 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T> A, DeviceMatrix<T> B, Devic
 
     __syncthreads();
   }
-  Csub.set_value(sum, row, col);
+  Csub(row, col) = sum;
 }
 
 template <Numeric T>
-float run_kernel(KernelType kernelType, DeviceMatrix<T>& dA, DeviceMatrix<T>& dB, DeviceMatrix<T>& dC,
+float run_kernel(KernelType kernelType, DeviceMatrix<T, DeviceAsyncMemoryAllocator>& dA,
+                 DeviceMatrix<T, DeviceAsyncMemoryAllocator>& dB, DeviceMatrix<T, DeviceAsyncMemoryAllocator>& dC,
                  CudaStream& streamWrapper, int block_size) {
   cudaStream_t stream = streamWrapper.stream;
   CudaEventRecorder recorder = streamWrapper.record("matrix multiplication on GPU");
@@ -95,10 +98,11 @@ float run_kernel(KernelType kernelType, DeviceMatrix<T>& dA, DeviceMatrix<T>& dB
   dim3 dimGrid((dA.width + dimBlock.x - 1) / dimBlock.x, (dB.height + dimBlock.y - 1) / dimBlock.y);
 
   if (kernelType == KernelType::NAIVE) {
-    matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA, dB, dC);
+    matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA.copy(), dB.copy(), dC.copy());
   } else if (kernelType == KernelType::TILED) {
     int shared_mem_size = 2 * block_size * block_size * sizeof(T);
-    matrixMulTiledKernel<T><<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA, dB, dC, block_size);
+    matrixMulTiledKernel<T>
+        <<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA.copy(), dB.copy(), dC.copy(), block_size);
   } else {
     throw std::runtime_error("Invalid kernel type");
   }
@@ -188,10 +192,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  HostMatrix<bf16> A(args.width, args.height);
-  HostMatrix<bf16> B(args.width, args.height);
-  HostMatrix<bf16> C(args.width, args.height);
-  HostMatrix<bf16> C_ref(args.width, args.height);
+  HostMatrix<bf16, HostMemoryAllocator> A(args.width, args.height);
+  HostMatrix<bf16, HostMemoryAllocator> B(args.width, args.height);
+  HostMatrix<bf16, HostMemoryAllocator> C(args.width, args.height);
+  HostMatrix<bf16, HostMemoryAllocator> C_ref(args.width, args.height);
 
   A.randomize(generator);
   B.randomize(generator);
@@ -206,9 +210,12 @@ int main(int argc, char* argv[]) {
   CudaStream streamWrapper;
   cudaStream_t stream = streamWrapper.stream;
 
-  DeviceMatrix<bf16> dA = A.to_device_async(stream);
-  DeviceMatrix<bf16> dB = B.to_device_async(stream);
-  DeviceMatrix<bf16> dC = C.to_device_async(stream);
+  DeviceMatrix<bf16, DeviceAsyncMemoryAllocator> dA(args.width, args.width, args.height, stream);
+  DeviceMatrix<bf16, DeviceAsyncMemoryAllocator> dB(args.width, args.width, args.height, stream);
+  DeviceMatrix<bf16, DeviceAsyncMemoryAllocator> dC(args.width, args.width, args.height, stream);
+
+  cudaCheck(cudaMemcpyAsync(dA.data, A.data, A.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
+  cudaCheck(cudaMemcpyAsync(dB.data, B.data, B.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
 
   // warm up
   run_kernel<bf16>(args.kernel_type, dA, dB, dC, streamWrapper, args.block_size);
@@ -233,21 +240,11 @@ int main(int argc, char* argv[]) {
   }
 
   printf("Copying results to host\n");
-  C.from_device_async(dC, stream);
+  cudaCheck(cudaMemcpyAsync(C.data, dC.data, C.size() * sizeof(bf16), cudaMemcpyDeviceToHost, stream));
   cudaCheck(cudaStreamSynchronize(stream));
-
-  // C_ref.print_row("C_ref", 0);
 
   printf("Verifying results\n");
   C.verify(C_ref);
-
-  printf("Releasing memory\n");
-  dC.close(stream);
-  dA.close(stream);
-  dB.close(stream);
-  A.close();
-  B.close();
-  C.close();
 
   return 0;
 }
