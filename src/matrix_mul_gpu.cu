@@ -26,7 +26,8 @@ struct Args {
 };
 
 template <Numeric T>
-void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>& C) {
+void matrixMulCpu(const Matrix<T, HostMemoryAllocator>& A, const Matrix<T, HostMemoryAllocator>& B,
+                  Matrix<T, HostMemoryAllocator>& C) {
   Timer timer("matrix multiplication on CPU");
   for (int row = 0; row < A.height; row++) {
     for (int col = 0; col < B.width; col++) {
@@ -40,8 +41,7 @@ void matrixMulCpu(const HostMatrix<T>& A, const HostMatrix<T>& B, HostMatrix<T>&
 }
 
 template <Numeric T>
-__global__ void matrixMulNaiveKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatrix<T, NoAllocator> B,
-                                     DeviceMatrix<T, NoAllocator> C) {
+__global__ void matrixMulNaiveKernel(Matrix<T, NoAllocator> A, Matrix<T, NoAllocator> B, Matrix<T, NoAllocator> C) {
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -56,8 +56,8 @@ __global__ void matrixMulNaiveKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatri
 }
 
 template <Numeric T>
-__global__ void matrixMulTiledKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatrix<T, NoAllocator> B,
-                                     DeviceMatrix<T, NoAllocator> C, int block_size) {
+__global__ void matrixMulTiledKernel(Matrix<T, NoAllocator> A, Matrix<T, NoAllocator> B, Matrix<T, NoAllocator> C,
+                                     int block_size) {
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
   const int blockCol = blockIdx.x;
@@ -67,11 +67,11 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatri
   T* As = &smem[0];
   T* Bs = &smem[block_size * block_size];
 
-  DeviceMatrix<T, NoAllocator> Csub = C.get_block(blockRow, blockCol, block_size);
+  Matrix<T, NoAllocator> Csub = C.get_block(blockRow, blockCol, block_size);
   T sum = 0.0;
   for (int b = 0; b < (A.width / block_size); ++b) {
-    DeviceMatrix<T, NoAllocator> Asub = A.get_block(blockRow, b, block_size);
-    DeviceMatrix<T, NoAllocator> Bsub = B.get_block(b, blockCol, block_size);
+    Matrix<T, NoAllocator> Asub = A.get_block(blockRow, b, block_size);
+    Matrix<T, NoAllocator> Bsub = B.get_block(b, blockCol, block_size);
 
     As[row * block_size + col] = Asub(row, col);
     Bs[row * block_size + col] = Bsub(row, col);
@@ -88,8 +88,8 @@ __global__ void matrixMulTiledKernel(DeviceMatrix<T, NoAllocator> A, DeviceMatri
 }
 
 template <Numeric T>
-float run_kernel(KernelType kernelType, DeviceMatrix<T, DeviceAsyncMemoryAllocator>& dA,
-                 DeviceMatrix<T, DeviceAsyncMemoryAllocator>& dB, DeviceMatrix<T, DeviceAsyncMemoryAllocator>& dC,
+float run_kernel(KernelType kernelType, Matrix<T, DeviceAsyncMemoryAllocator>& dA,
+                 Matrix<T, DeviceAsyncMemoryAllocator>& dB, Matrix<T, DeviceAsyncMemoryAllocator>& dC,
                  CudaStream& streamWrapper, int block_size) {
   cudaStream_t stream = streamWrapper.stream;
   CudaEventRecorder recorder = streamWrapper.record("matrix multiplication on GPU");
@@ -192,10 +192,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  HostMatrix<bf16, HostMemoryAllocator> A(args.width, args.height);
-  HostMatrix<bf16, HostMemoryAllocator> B(args.width, args.height);
-  HostMatrix<bf16, HostMemoryAllocator> C(args.width, args.height);
-  HostMatrix<bf16, HostMemoryAllocator> C_ref(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> A(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> B(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> C(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> C_ref(args.width, args.height);
 
   A.randomize(generator);
   B.randomize(generator);
@@ -210,9 +210,9 @@ int main(int argc, char* argv[]) {
   CudaStream streamWrapper;
   cudaStream_t stream = streamWrapper.stream;
 
-  DeviceMatrix<bf16, DeviceAsyncMemoryAllocator> dA(args.width, args.width, args.height, stream);
-  DeviceMatrix<bf16, DeviceAsyncMemoryAllocator> dB(args.width, args.width, args.height, stream);
-  DeviceMatrix<bf16, DeviceAsyncMemoryAllocator> dC(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dA(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dB(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dC(args.width, args.width, args.height, stream);
 
   cudaCheck(cudaMemcpyAsync(dA.data, A.data, A.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
   cudaCheck(cudaMemcpyAsync(dB.data, B.data, B.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));

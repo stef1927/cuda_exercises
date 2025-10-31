@@ -10,6 +10,7 @@
 
 class Timer {
  public:
+  Timer(const char* name) : name(name) { start = std::chrono::high_resolution_clock::now(); }
   Timer(const std::string& name) : name(name) { start = std::chrono::high_resolution_clock::now(); }
 
   ~Timer() {
