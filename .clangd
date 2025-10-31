@@ -2,6 +2,7 @@
 If:
   PathMatch: .*\.(cu|cuh)$
 CompileFlags:
+  Compiler: nvcc
   Add:
     - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include"
     - "--cuda-path=/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0"
@@ -12,6 +13,7 @@ CompileFlags:
 If:
   PathMatch: .*\.(cpp|hpp|h)$
 CompileFlags:
+  Compiler: nvc++
   Add:
     - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include"
     - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/compilers/include"
