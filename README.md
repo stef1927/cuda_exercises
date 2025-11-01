@@ -1,14 +1,24 @@
-# CUDA Exercises
+# Parallel programming practice
 
-A collection of CUDA programming exercises developed based on the following sources:
+A collection of CUDA and OpenMP programming exercises. Based on the following sources:
 
 * NVIDIA [CUDA Samples](https://github.com/NVIDIA/cuda-samples/tree/master)
 * NVIDIA [CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide)
 * *Programming Massively Parallel Processors, 4th Edition*, by Wen-mei W. Hwu, David B. Kirk, and Izzat El Hajj, Published by Morgan Kaufmann
 
-The command-line parsing implementation is incorporated directly from [ArgParse](https://github.com/p-ranav/argparse) without modifications to minimize external dependencies.
+## Requirements
+
+* NVIDIA HPC SDK for compiling the cpu examples, CUDA runtime toolkit (included in SDK) for gpu examples.
+
+## Credits
+
+* argparse.hpp taken from https://github.com/p-ranav/argparse
+* sources listed above
 
 ## Building the Examples
+
+You may need to change the paths in .clangd for the linter. 
+Ensure nvcc and nvc++ can be found or edit the Makefile. For profiling, nsys, ncu, and vtune are also referenced from the Makefile.
 
 All examples can be built using the provided Makefile with the following command:
 
@@ -28,26 +38,16 @@ All compiled binaries are output to the `build` directory.
 
 Each binary can be launched without arguments to use default parameters, or with the `--help` flag to display all supported command-line arguments and options.
 
-## Performance Profiling
-
-Performance profiling can be performed using NVIDIA Compute Profiler (NCU). Refer to the `Makefile` for specific profiling configuration flags. To profile an example, use the following make command:
-
-```bash
-make <example_file_name>_profile
-```
-
-For example, to profile the matrix multiplication implementation:
-
-```bash
-make matrix_mul_profile
-```
-
 ## Matrix Multiplication
 
 This exercise demonstrates multiple implementations of matrix multiplication with varying levels of optimization:
 
-* **Naive Implementation**: A straightforward approach that reads data directly from global memory, with each thread computing one output element of the result matrix. This serves as a baseline for performance comparison.
-* **Tiled Implementation**: An optimized version that improves upon the naive approach by loading matrix tiles into shared memory, significantly reducing global memory accesses and improving memory bandwidth utilization.
+* **CUDA Naive Implementation**: A straightforward approach that reads data directly from global memory, with each thread computing one output element of the result matrix. This serves as a baseline for performance comparison.
+* **CUDA Tiled Implementation**: An optimized version that improves upon the naive approach by loading matrix tiles into shared memory, significantly reducing global memory accesses and improving memory bandwidth utilization.
+* **OpenMP Naive Parallel**: A multi-threaded naive CPU implementation based on OpenMP.
+* **OpenMP Tiled Parallel**: A multi-threaded tiled CPU implementation based on OpenMP.
+
+Matrices can be access in row-major or coloumn-major format.
 
 ## Histogram
 
@@ -67,4 +67,5 @@ This exercise demonstrates parallel stream compaction, a fundamental operation t
 
 * **STL Serial**: A baseline single-threaded CPU implementation using standard library algorithms.
 * **STL Parallel**: A multi-threaded CPU implementation leveraging C++ parallel execution policies (`std::execution::par`).
+* **OpenMP Parallel**: A multi-threaded CPU implementation based on OpenMP.
 * **GPU Three-Pass Kernel**: A GPU-accelerated implementation employing a three-stage pipeline: (1) predicate evaluation to generate indicator flags, (2) inclusive scan using the CUB library to compute output positions, and (3) parallel gather of selected elements to their final positions in the output array.
