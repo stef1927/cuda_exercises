@@ -22,7 +22,7 @@ matrix_mul_gpu: $(SRC_DIR)/matrix_mul_gpu.cu
 	$(NVCC) -o $(OUTPUT_FILE) $^
 
 matrix_mul_gpu_profile: $(OUTPUT_DIR)/matrix_mul_gpu
-	$(NCU) -o $(NCU_OUTPUT_FILE) $^ --num-runs=1
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^
 
 matrix_mul_cpu: $(SRC_DIR)/matrix_mul_cpu.cpp
 	$(NVC++) -o $(OUTPUT_FILE) $^
@@ -60,7 +60,13 @@ stream_compaction_gpu_profile: $(OUTPUT_DIR)/stream_compaction_gpu
 stream_compaction_gpu_nsys: $(OUTPUT_DIR)/stream_compaction_gpu
 	$(NSYS) -o $(NSYS_OUTPUT_FILE) $^
 
-all: matrix_mul histogram reduction scan stream_compaction_cpu stream_compaction_gpu
+coordinates: $(SRC_DIR)/coordinates.cu
+	$(NVCC) -o $(OUTPUT_FILE) $^
+
+coordinates_profile: $(OUTPUT_DIR)/coordinates
+	$(NCU) -o $(NCU_OUTPUT_FILE) $^
+
+all: matrix_mul histogram reduction scan stream_compaction_cpu stream_compaction_gpu coordinates
 
 clean:
 	rm -f $(OUTPUT_DIR)/matrix_mul
@@ -69,3 +75,4 @@ clean:
 	rm -f $(OUTPUT_DIR)/scan
 	rm -f $(OUTPUT_DIR)/stream_compaction_cpu
 	rm -f $(OUTPUT_DIR)/stream_compaction_gpu
+	rm -f $(OUTPUT_DIR)/coordinates

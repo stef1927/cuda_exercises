@@ -150,10 +150,10 @@ struct CudaDeleter {
   }
 };
 
-template <Numeric T>
+template <typename T>
 using CudaUniquePtr = std::unique_ptr<T, CudaDeleter>;
 
-template <Numeric T>
+template <typename T>
 CudaUniquePtr<T> make_cuda_unique(size_t count = 1, bool managed = false) {
   T* ptr = nullptr;
   if (count > 0) {
