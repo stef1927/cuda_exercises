@@ -8,7 +8,7 @@ A collection of CUDA and OpenMP programming exercises. Based on the following so
 
 ## Requirements
 
-* NVIDIA HPC SDK for compiling the cpu examples, CUDA runtime toolkit (included in SDK) for gpu examples.
+* NVIDIA HPC SDK for compiling the CPU examples, CUDA toolkit (included in SDK) for the GPU examples.
 
 ## Credits
 
@@ -47,7 +47,7 @@ This exercise demonstrates multiple implementations of matrix multiplication wit
 * **OpenMP Naive Parallel**: A multi-threaded naive CPU implementation based on OpenMP.
 * **OpenMP Tiled Parallel**: A multi-threaded tiled CPU implementation based on OpenMP.
 
-Matrices can be access in row-major or coloumn-major format.
+Matrices can be accessed in row-major or column-major format.
 
 ## Histogram
 
