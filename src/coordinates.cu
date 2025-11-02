@@ -1,6 +1,5 @@
 #include <cuda.h>
 #include <cuda_bf16.h>
-#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <stdlib.h>
 
@@ -57,12 +56,12 @@ int parse_args(int argc, char* argv[], Args& args) {
   program.add_argument("--block-size")
       .help("The block size")
       .scan<'i', int>()
-      .default_value(64)
+      .default_value(128)
       .store_into(args.block_size);
   program.add_argument("--precision")
       .help("The precision: single, double, bf16")
       .choices("single", "double", "bf16")
-      .default_value("single")
+      .default_value("bf16")
       .store_into(args.precision);
   try {
     program.parse_args(argc, argv);
@@ -161,6 +160,32 @@ __global__ void cartesian_to_polar_kernel_1(CartesianCoord* __restrict__ _cartes
 
 
 template <typename CartesianCoord, typename PolarCoord>
+__global__ void cartesian_to_polar_kernel_2(CartesianCoord* __restrict__ _cartesian_coordinates,
+                                            PolarCoord* __restrict__ _polar_coordinates, int N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N) {
+    CartesianCoord coord = _cartesian_coordinates[idx];
+    float r = __fsqrt_rn(__fmaf_rn(coord.x, coord.x, __fmul_rn(coord.y, coord.y)));
+    float theta = atan2f(coord.y, coord.x);
+    PolarCoord polar_coord = PolarCoord(r, theta);
+    _polar_coordinates[idx] = polar_coord;
+  }
+}
+
+__global__ void cartesian_to_polar_kernel_2(CartesianCoordBf16* __restrict__ _cartesian_coordinates,
+                                            PolarCoordBf16* __restrict__ _polar_coordinates, int N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N) {
+    CartesianCoordBf16 coord = _cartesian_coordinates[idx];
+    float r = hsqrt(__hfma(coord.x, coord.x, __hmul(coord.y, coord.y)));
+    float theta = atan2f(coord.y, coord.x);
+    PolarCoordBf16 polar_coord = PolarCoordBf16(r, theta);
+    _polar_coordinates[idx] = polar_coord;
+  }
+}
+
+
+template <typename CartesianCoord, typename PolarCoord>
 void launch_kernel(int kernel_num, CartesianCoord* d_cartesian_coordinates, PolarCoord* d_polar_coordinates, int N,
                    int block_size, CudaStream& streamWrapper) {
   Timer timer(std::format("launch kernel no. {}", kernel_num));
@@ -176,6 +201,11 @@ void launch_kernel(int kernel_num, CartesianCoord* d_cartesian_coordinates, Pola
     }
     case 1: {
       cartesian_to_polar_kernel_1<<<dimGrid, dimBlock, 0, streamWrapper.stream>>>(d_cartesian_coordinates,
+                                                                                  d_polar_coordinates, N);
+      break;
+    }
+    case 2: {
+      cartesian_to_polar_kernel_2<<<dimGrid, dimBlock, 0, streamWrapper.stream>>>(d_cartesian_coordinates,
                                                                                   d_polar_coordinates, N);
       break;
     }
@@ -202,7 +232,7 @@ int run_test(const Args& args, double tolerance) {
                             args.N * sizeof(CartesianCoord), cudaMemcpyHostToDevice, streamWrapper.stream));
   auto d_polar_coordinates = make_cuda_unique<PolarCoord>(args.N);
 
-  for (int kernel_num = 0; kernel_num < 2; kernel_num++) {
+  for (int kernel_num = 0; kernel_num < 3; kernel_num++) {
     launch_kernel(kernel_num, d_cartesian_coordinates.get(), d_polar_coordinates.get(), args.N, args.block_size,
                   streamWrapper);
     cudaCheck(cudaMemcpyAsync(polar_coordinates.data(), d_polar_coordinates.get(), args.N * sizeof(PolarCoord),

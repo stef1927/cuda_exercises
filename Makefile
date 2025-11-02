@@ -3,7 +3,7 @@ CUDA_INCLUDE = -I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include
 NVC++_FLAGS = -std=c++20 -stdpar=multicore -O3 -gopt -mp=ompt $(CUDA_INCLUDE)
 NVC++ = nvc++ $(NVC++_FLAGS) -ldl
 
-NVCCC_FLAGS = -w -Wno-deprecated-gpu-targets --std=c++20 -O3 -DNDEBUG $(CUDA_INCLUDE)
+NVCCC_FLAGS = -w -Wno-deprecated-gpu-targets --std=c++20 -O3 -DNDEBUG $(CUDA_INCLUDE) -arch=compute_89
 NVCC = nvcc $(NVCCC_FLAGS) $(NVCC_LDFLAGS) -lcuda -lineinfo
 
 NCU = ncu --set full --import-source yes -f --page details
