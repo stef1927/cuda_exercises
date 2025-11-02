@@ -8,6 +8,7 @@
 #include <cuda/std/concepts>
 #include <cuda/std/optional>
 #include <memory>
+#include <string>
 
 template <typename T>
 concept Numeric = cuda::std::integral<T> || cuda::std::floating_point<T> || cuda::std::is_same_v<T, __nv_bfloat16> ||
@@ -137,7 +138,9 @@ class CudaStream {
     return *this;
   }
 
-  CudaEventRecorder record(const char* operation_name) { return CudaEventRecorder(operation_name, stream); }
+  CudaEventRecorder record(const std::string& operation_name) {
+    return CudaEventRecorder(operation_name.c_str(), stream);
+  }
 
  public:
   cudaStream_t stream;
