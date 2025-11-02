@@ -160,7 +160,7 @@ std::vector<int> compact_stream_omp(const std::vector<int>& input_data, Predicat
   std::vector<int> output_data;
   std::vector<int> output_data_indexes(input_data.size());
   std::vector<unsigned long long> sums(num_threads);
-  output_data.reserve(input_data.size() / 2);
+  output_data.reserve(input_data.size());
 
   if (input_data.size() == 0) {
     throw std::invalid_argument("Input data is empty");
