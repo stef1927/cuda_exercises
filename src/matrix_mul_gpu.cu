@@ -208,10 +208,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  Matrix<bf16, HostMemoryAllocator, RowMajor> A(args.width, args.height);
-  Matrix<bf16, HostMemoryAllocator, RowMajor> B(args.width, args.height);
-  Matrix<bf16, HostMemoryAllocator, RowMajor> C(args.width, args.height);
-  Matrix<bf16, HostMemoryAllocator, RowMajor> C_ref(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> A(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> B(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> C(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> C_ref(args.width, args.height);
 
   A.randomize(generator);
   B.randomize(generator);
@@ -219,34 +219,19 @@ int main(int argc, char* argv[]) {
   printf("Performaing matrix multiplication on CPU\n");
   matrixMulCpu<bf16>(A, B, C_ref);
 
-  printf("Copying B to column major\n");
-  Matrix<bf16, HostMemoryAllocator, ColumnMajor> B_col_major = to_column_major(B);
-  B.verify(B_col_major);
-
   printf("Initializing device matrices\n");
   CudaStream streamWrapper;
   cudaStream_t stream = streamWrapper.stream;
 
-  Matrix<bf16, DeviceAsyncMemoryAllocator, RowMajor> dA(args.width, args.width, args.height, stream);
-  Matrix<bf16, DeviceAsyncMemoryAllocator, RowMajor> dB(args.width, args.width, args.height, stream);
-  Matrix<bf16, DeviceAsyncMemoryAllocator, ColumnMajor> dB_col_major(args.width, args.width, args.height, stream);
-  Matrix<bf16, DeviceAsyncMemoryAllocator, RowMajor> dC(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dA(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dB(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dC(args.width, args.width, args.height, stream);
 
   cudaCheck(cudaMemcpyAsync(dA.data, A.data, A.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
   cudaCheck(cudaMemcpyAsync(dB.data, B.data, B.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
-  cudaCheck(cudaMemcpyAsync(dB_col_major.data, B_col_major.data, B_col_major.size() * sizeof(bf16),
-                            cudaMemcpyHostToDevice, stream));
 
-  // warm up
-  run_kernel<bf16>(KernelType::NAIVE, dA, dB, dC, streamWrapper, args.block_size);
-  verify_results(C, dC, C_ref, stream);
-
-  // measure
   for (auto kernel_type : {KernelType::NAIVE, KernelType::TILED}) {
     run_kernel<bf16>(kernel_type, dA, dB, dC, streamWrapper, args.block_size);
-    verify_results(C, dC, C_ref, stream);
-
-    run_kernel<bf16>(kernel_type, dA, dB_col_major, dC, streamWrapper, args.block_size);
     verify_results(C, dC, C_ref, stream);
   }
   return 0;

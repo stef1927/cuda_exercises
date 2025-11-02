@@ -76,9 +76,7 @@ struct RowMajor {
   __host__ __device__ explicit RowMajor(int width, int height, int stride)
       : width(width), height(height), stride(stride) {}
 
-  __host__ __device__ inline int offset(int row, int col, int block_size = 1) const {
-    return row * stride * block_size + col * block_size;
-  }
+  __host__ __device__ inline int offset(int row, int col) const { return row * stride + col; }
 
   __host__ __device__ inline int size() const { return height * stride; }
 
@@ -87,7 +85,8 @@ struct RowMajor {
   int stride;
 };
 
-// Column major format for matrices, organizes memory in a column-major order
+// Column major format for matrices, organizes memory in a column-major order, because the kernels in matrix_mul_gpu.cu
+// map the CUDA threads to rows, column major is currently not used.
 struct ColumnMajor {
   static constexpr const char* name = "ColumnMajor";
 
@@ -96,9 +95,7 @@ struct ColumnMajor {
   __host__ __device__ explicit ColumnMajor(int width, int height, int stride)
       : width(width), height(height), stride(stride) {}
 
-  __host__ __device__ inline int offset(int row, int col, int block_size = 1) const {
-    return col * stride * block_size + row * block_size;
-  }
+  __host__ __device__ inline int offset(int row, int col) const { return col * stride + row; }
 
   __host__ __device__ inline int size() const { return width * stride; }
 
@@ -151,7 +148,7 @@ class Matrix {
   __host__ __device__ inline const T& operator()(int row, int col) const { return data[layout.offset(row, col)]; }
 
   __host__ __device__ inline Matrix<T, NoAllocator, Layout> get_block(int row, int col, int block_size) const {
-    T* block_data = &data[layout.offset(row, col, block_size)];
+    T* block_data = &data[layout.offset(row * block_size, col * block_size)];
     int width = block_size <= (layout.width - col) ? block_size : layout.width - col;
     int height = block_size <= (layout.height - row) ? block_size : layout.height - row;
     Matrix<T, NoAllocator, Layout> block(width, layout.stride, height, block_data);
