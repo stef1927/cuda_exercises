@@ -10,7 +10,8 @@
 #include <memory>
 
 template <typename T>
-concept Numeric = cuda::std::integral<T> || cuda::std::floating_point<T> || cuda::std::is_same_v<T, __nv_bfloat16>;
+concept Numeric = cuda::std::integral<T> || cuda::std::floating_point<T> || cuda::std::is_same_v<T, __nv_bfloat16> ||
+                  cuda::std::is_same_v<T, __half>;
 
 inline void __cudaCheck(cudaError_t error, const char* file, int line) {
   if (error != cudaSuccess) {
