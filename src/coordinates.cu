@@ -40,11 +40,6 @@ concept PolarCoord = cuda::std::is_same_v<T, PolarCoordFloat> || cuda::std::is_s
 template <typename T>
 concept Coord = CartesianCoord<T> || PolarCoord<T>;
 
-enum class KernelType {
-  NAIVE,
-  OPTIMIZED,
-};
-
 int parse_args(int argc, char* argv[], Args& args) {
   argparse::ArgumentParser program("coordinates");
 

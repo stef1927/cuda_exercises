@@ -15,57 +15,57 @@ typedef __nv_bfloat16 bf16;
 
 static std::default_random_engine generator(786);
 
-enum class KernelType { NAIVE, TILED };
+enum class KernelType { Naive, Tiled, WmmaSimple };
 
 std::string kernel_type_to_string(KernelType kernel_type) {
   static const std::map<KernelType, std::string> _kernel_type_to_string = {
-      {KernelType::NAIVE, "Naive"},
-      {KernelType::TILED, "Tiled"},
+      {KernelType::Naive, "Naive"},
+      {KernelType::Tiled, "Tiled"},
+      {KernelType::WmmaSimple, "WMMA Simple"},
   };
 
   return _kernel_type_to_string.at(kernel_type);
 }
 
 struct Args {
-  int width;
-  int height;
-  int block_size;
+  int m;           // Matrix A is m x k
+  int k;           // Matrix B is k x n
+  int n;           // Matrix C is m x n
+  int block_size;  // The Thread block size
+  int tile_size;   // The Tile size for shared memory tiles or WMMA
 };
 
 int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
   argparse::ArgumentParser program("matrix_mul");
   std::string kernel_type;
 
-  program.add_argument("--width")
-      .help("width of the matrix")
-      .scan<'i', int>()
-      .default_value(4096)
-      .store_into(args.width);
+  program.add_argument("--m").help("height of matrix A and C").scan<'i', int>().default_value(4096).store_into(args.m);
 
-  program.add_argument("--height")
-      .help("height of the matrix")
+  program.add_argument("--n").help("width of matrix B and C").scan<'i', int>().default_value(4096).store_into(args.n);
+
+  program.add_argument("--k")
+      .help("width of matrix A and height of matrix B")
       .scan<'i', int>()
       .default_value(4096)
-      .store_into(args.height);
+      .store_into(args.k);
 
   program.add_argument("--block-size")
-      .help("block size")
+      .help("thread block size")
       .scan<'i', int>()
       .default_value(16)
       .store_into(args.block_size);
+
+  program.add_argument("--tile-size")
+      .help("tile size for shared memory tiles or WMMA")
+      .scan<'i', int>()
+      .default_value(16)
+      .store_into(args.tile_size);
 
   try {
     program.parse_args(argc, argv);
   } catch (const std::exception& err) {
     std::cerr << err.what() << std::endl;
     std::cerr << program;
-    return 1;
-  }
-
-  // current limitation, for later on, we need to support different width and
-  // height for A and B and A.width must be equal to B.height (k)
-  if (args.width != args.height) {
-    std::cerr << "Width and height must be equal" << std::endl;
     return 1;
   }
 
@@ -76,41 +76,41 @@ int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
     return 1;
   }
 
-  if ((2 * args.block_size * args.block_size) > deviceProp.sharedMemPerBlock) {
-    std::cerr << "Block size must be less than or equal to the maximum number "
-                 "of shared memory per block"
+  if ((2 * args.tile_size * args.tile_size) > deviceProp.sharedMemPerBlock) {
+    std::cerr << "Tile size must be less than or equal to the maximum number "
+                 "of shared memory per tile"
               << std::endl;
     return 1;
   }
 
   printf("Arguments:\n");
-  printf("Width: %d\n", args.width);
-  printf("Height: %d\n", args.height);
-  printf("Block size: %d\n", args.block_size);
+  printf("Matrix A: %d x %d\n", args.m, args.k);
+  printf("Matrix B: %d x %d\n", args.k, args.n);
+  printf("Matrix C: %d x %d\n", args.m, args.n);
+  printf("Thread block size: %d\n", args.block_size);
+  printf("Tile size: %d\n", args.tile_size);
 
   return 0;
 }
 
 
-template <Numeric T, typename LayoutA = RowMajor, typename LayoutB = RowMajor, typename LayoutC = RowMajor>
-__global__ void matrixMulNaiveKernel(Matrix<T, NoAllocator, LayoutA> A, Matrix<T, NoAllocator, LayoutB> B,
-                                     Matrix<T, NoAllocator, LayoutC> C) {
+template <Numeric T>
+__global__ void matrixMulNaiveKernel(T* A, T* B, T* C, int M, int K, int N) {
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (row < C.height() && col < C.width()) {
+  if (row < M && col < N) {
     T sum = 0.0;
-    for (int k = 0; k < A.width(); ++k) {
-      sum += A(row, k) * B(k, col);
+    for (int kk = 0; kk < K; ++kk) {
+      sum += A[row * K + kk] * B[kk * N + col];
     }
 
-    C(row, col) = sum;
+    C[row * N + col] = sum;
   }
 }
 
-template <Numeric T, typename LayoutA = RowMajor, typename LayoutB = RowMajor, typename LayoutC = RowMajor>
-__global__ void matrixMulTiledKernel(Matrix<T, NoAllocator, LayoutA> A, Matrix<T, NoAllocator, LayoutB> B,
-                                     Matrix<T, NoAllocator, LayoutC> C, int block_size) {
+template <Numeric T>
+__global__ void matrixMulTiledKernel(T* A, T* B, T* C, int M, int K, int N, int block_size) {
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
   const int blockCol = blockIdx.x;
@@ -120,14 +120,10 @@ __global__ void matrixMulTiledKernel(Matrix<T, NoAllocator, LayoutA> A, Matrix<T
   T* As = &smem[0];
   T* Bs = &smem[block_size * block_size];
 
-  Matrix<T, NoAllocator, LayoutC> Csub = C.get_block(blockRow, blockCol, block_size);
   T sum = 0.0;
-  for (int b = 0; b < (A.width() / block_size); ++b) {
-    Matrix<T, NoAllocator, LayoutA> Asub = A.get_block(blockRow, b, block_size);
-    Matrix<T, NoAllocator, LayoutB> Bsub = B.get_block(b, blockCol, block_size);
-
-    As[row * block_size + col] = Asub(row, col);
-    Bs[row * block_size + col] = Bsub(row, col);
+  for (int b = 0; b < (K / block_size); ++b) {
+    As[row * block_size + col] = A[(blockRow * block_size + row) * K + (b * block_size + col)];
+    Bs[row * block_size + col] = B[(b * block_size + row) * K + (blockCol * block_size + col)];
 
     __syncthreads();
 
@@ -137,25 +133,26 @@ __global__ void matrixMulTiledKernel(Matrix<T, NoAllocator, LayoutA> A, Matrix<T
 
     __syncthreads();
   }
-  Csub(row, col) = sum;
+  C[(blockRow * block_size + row) * N + (blockCol * block_size + col)] = sum;
 }
 
 template <Numeric T, typename LayoutA = RowMajor, typename LayoutB = RowMajor, typename LayoutC = RowMajor>
 void run_kernel(KernelType kernelType, Matrix<T, DeviceAsyncMemoryAllocator, LayoutA>& dA,
                 Matrix<T, DeviceAsyncMemoryAllocator, LayoutB>& dB, Matrix<T, DeviceAsyncMemoryAllocator, LayoutC>& dC,
-                Matrix<T, HostMemoryAllocator, LayoutC>& C, CudaStream& streamWrapper, int block_size) {
+                Matrix<T, HostMemoryAllocator, LayoutC>& C, CudaStream& streamWrapper, Args& args) {
   cudaStream_t stream = streamWrapper.stream;
   CudaEventRecorder recorder = streamWrapper.record("matrix multiplication on GPU");
+  int block_size = args.block_size;
 
   dim3 dimBlock(block_size, block_size);
-  dim3 dimGrid((dA.width() + dimBlock.x - 1) / dimBlock.x, (dB.height() + dimBlock.y - 1) / dimBlock.y);
+  dim3 dimGrid((dC.width() + dimBlock.x - 1) / dimBlock.x, (dC.height() + dimBlock.y - 1) / dimBlock.y);
 
-  if (kernelType == KernelType::NAIVE) {
-    matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA.copy(), dB.copy(), dC.copy());
-  } else if (kernelType == KernelType::TILED) {
-    int shared_mem_size = 2 * block_size * block_size * sizeof(T);
+  if (kernelType == KernelType::Naive) {
+    matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA.data, dB.data, dC.data, args.m, args.k, args.n);
+  } else if (kernelType == KernelType::Tiled) {
+    int shared_mem_size = 2 * block_size * block_size * sizeof(T);  // FIXME use tile size
     matrixMulTiledKernel<T>
-        <<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA.copy(), dB.copy(), dC.copy(), block_size);
+        <<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA.data, dB.data, dC.data, args.m, args.k, args.n, block_size);
   } else {
     throw std::runtime_error("Invalid kernel type");
   }
@@ -183,10 +180,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  Matrix<bf16, HostMemoryAllocator> A(args.width, args.height);
-  Matrix<bf16, HostMemoryAllocator> B(args.width, args.height);
-  Matrix<bf16, HostMemoryAllocator> C1(args.width, args.height);
-  Matrix<bf16, HostMemoryAllocator> C2(args.width, args.height);
+  Matrix<bf16, HostMemoryAllocator> A(args.k, args.m);
+  Matrix<bf16, HostMemoryAllocator> B(args.n, args.k);
+  Matrix<bf16, HostMemoryAllocator> C1(args.n, args.m);  // change to float
+  Matrix<bf16, HostMemoryAllocator> C2(args.n, args.m);
 
   A.randomize(generator);
   B.randomize(generator);
@@ -194,16 +191,16 @@ int main(int argc, char* argv[]) {
   CudaStream streamWrapper;
   cudaStream_t stream = streamWrapper.stream;
 
-  Matrix<bf16, DeviceAsyncMemoryAllocator> dA(args.width, args.width, args.height, stream);
-  Matrix<bf16, DeviceAsyncMemoryAllocator> dB(args.width, args.width, args.height, stream);
-  Matrix<bf16, DeviceAsyncMemoryAllocator> dC(args.width, args.width, args.height, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dA(args.k, args.k, args.m, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dB(args.n, args.n, args.k, stream);
+  Matrix<bf16, DeviceAsyncMemoryAllocator> dC(args.n, args.n, args.m, stream);
 
   cudaCheck(cudaMemcpyAsync(dA.data, A.data, A.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
   cudaCheck(cudaMemcpyAsync(dB.data, B.data, B.size() * sizeof(bf16), cudaMemcpyHostToDevice, stream));
 
   // Run naive and tiled kernels, assuming naive is correct, verify the results match
-  run_kernel<bf16>(KernelType::NAIVE, dA, dB, dC, C1, streamWrapper, args.block_size);
-  run_kernel<bf16>(KernelType::TILED, dA, dB, dC, C2, streamWrapper, args.block_size);
+  run_kernel<bf16>(KernelType::Naive, dA, dB, dC, C1, streamWrapper, args);
+  run_kernel<bf16>(KernelType::Tiled, dA, dB, dC, C2, streamWrapper, args);
 
   C1.verify(C2);
 
