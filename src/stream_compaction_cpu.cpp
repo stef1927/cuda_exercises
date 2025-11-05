@@ -1,14 +1,15 @@
 #include <omp.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <execution>
 #include <functional>
+#include <iostream>
 #include <numeric>
 #include <ranges>
 #include <vector>
 
-#include "argparse.hpp"
 #include "cpp_utils.hpp"
 #include "stream_compaction_utils.hpp"
 
@@ -21,32 +22,42 @@ struct Args {
 
 
 int parse_args(int argc, char* argv[], Args& args) {
-  argparse::ArgumentParser program("stream_compaction_cpu");
-  program.add_argument("--size")
-      .help("The size of the array to scan")
-      .scan<'i', int>()
-      .default_value(1 << 24)
-      .store_into(args.size);
-  program.add_argument("--chunk-size")
-      .help("The chunk size")
-      .scan<'i', int>()
-      .default_value(1024 * 1024)
-      .store_into(args.chunk_size);
-  program.add_argument("--debug-print")
-      .help("Whether to print debug information")
-      .default_value(false)
-      .store_into(args.debug_print);
-  try {
-    program.parse_args(argc, argv);
-  } catch (const std::exception& err) {
-    std::cerr << err.what() << std::endl;
-    std::cerr << program;
-    return 1;
+  args.size = 1 << 24;
+  args.chunk_size = 1024 * 1024;
+  args.debug_print = false;
+  int i = 1;
+  while (i < argc) {
+    std::string arg = argv[i];
+    if (arg == "--size") {
+      if (i + 1 >= argc) {
+        std::cerr << "Missing value for argument: " << arg << std::endl;
+        return 1;
+      }
+      args.size = std::stoi(argv[i + 1]);
+      i += 2;
+    } else if (arg == "--chunk-size") {
+      if (i + 1 >= argc) {
+        std::cerr << "Missing value for argument: " << arg << std::endl;
+        return 1;
+      }
+      args.chunk_size = std::stoi(argv[i + 1]);
+      i += 2;
+    } else if (arg == "--debug-print") {
+      args.debug_print = true;
+      i++;
+    } else if (arg == "--help") {
+      std::cout << "Usage: " << argv[0] << " [--size <size>] [--chunk-size <chunk-size>] [--debug-print]" << std::endl;
+      return 1;
+    } else {
+      std::cerr << "Unknown argument: " << arg << std::endl;
+      return 1;
+    }
   }
 
-  printf("Arguments:\n");
-  printf("  Size: %d\n", args.size);
-  printf("  Chunk size: %d\n", args.chunk_size);
+  std::cout << "Arguments:" << std::endl;
+  std::cout << "  Size: " << args.size << std::endl;
+  std::cout << "  Chunk size: " << args.chunk_size << std::endl;
+  std::cout << "  Debug print: " << args.debug_print << std::endl;
   return 0;
 }
 

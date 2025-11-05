@@ -1,5 +1,6 @@
 CUDA_INCLUDE = -I/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/include
 
+# For gcc: gcc 10 and above for -std=c++20, use --std=c++2a for older versions, use -fopenmp for OpenMP support
 NVC++_FLAGS = -std=c++20 -stdpar=multicore -O3 -gopt -mp=ompt $(CUDA_INCLUDE)
 NVC++ = nvc++ $(NVC++_FLAGS) -ldl
 
