@@ -44,13 +44,10 @@ stream_compaction: $(SRC_DIR)/stream_compaction.cu
 	$(NVCC) --extended-lambda -o $(OUTPUT_FILE) $^
 
 stream_compaction_cpu: $(SRC_DIR)/stream_compaction_cpu.cpp $(SRC_DIR)/stream_compaction_utils.cpp
-	$(NVC++) -o $(OUTPUT_FILE) $^
+	$(NVCC) $(NVCCC_FLAGS) -Xcompiler "-fopenmp -g" -o $(OUTPUT_FILE) $^
 
 stream_compaction_gpu: $(SRC_DIR)/stream_compaction_gpu.cu $(SRC_DIR)/stream_compaction_utils.cpp
 	$(NVCC) --extended-lambda -o $(OUTPUT_FILE) $^
-
-stream_compaction_cpu_nsys: $(OUTPUT_DIR)/stream_compaction_cpu
-	$(NSYS) -o $(REPORTS_OUTPUT_DIR)/$@ $^
 
 stream_compaction_cpu_vtune: $(OUTPUT_DIR)/stream_compaction_cpu
 	$(VTUNE) -r $(REPORTS_OUTPUT_DIR)/$@ $^
