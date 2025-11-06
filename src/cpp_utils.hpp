@@ -10,20 +10,53 @@
 
 class Timer {
  public:
-  Timer(const char* name) : name(name) { start = std::chrono::high_resolution_clock::now(); }
-  Timer(const std::string& name) : name(name) { start = std::chrono::high_resolution_clock::now(); }
+  Timer(const char* name, int num_runs = 1, bool auto_start = true)
+      : name(name), num_runs(num_runs), running(false), duration_millis(0.0f) {
+    if (auto_start) {
+      start();
+    }
+  }
+  Timer(const std::string& name, int num_runs = 1, bool auto_start = true)
+      : name(name), num_runs(num_runs), running(false), duration_millis(0.0f) {
+    if (auto_start) {
+      start();
+    }
+  }
+
+  void start() {
+    if (!running) {
+      begin = std::chrono::steady_clock::now();
+      running = true;
+    }
+  }
+
+  void stop() {
+    if (running) {
+      end = std::chrono::steady_clock::now();
+      std::chrono::duration<double, std::milli> duration = end - begin;
+      begin = end;
+      duration_millis += duration.count();
+      running = false;
+    }
+  }
 
   ~Timer() {
-    end = std::chrono::high_resolution_clock::now();
-    duration = end - start;
-    printf("Total time taken to perform %s: %f milliseconds\n", name.c_str(), duration.count());
+    stop();
+    if (num_runs > 1) {
+      printf("Total time taken to perform %d runs of %s: %f milliseconds\n", num_runs, name.c_str(), duration_millis);
+      printf("Average time taken per run: %f milliseconds\n", duration_millis / num_runs);
+    } else {
+      printf("Time taken to perform %s: %f milliseconds\n", name.c_str(), duration_millis);
+    }
   }
 
  private:
   std::string name;
-  std::chrono::high_resolution_clock::time_point start;
-  std::chrono::high_resolution_clock::time_point end;
-  std::chrono::duration<double, std::milli> duration;
+  int num_runs;
+  bool running;
+  std::chrono::steady_clock::time_point begin;
+  std::chrono::steady_clock::time_point end;
+  double duration_millis;
 };
 
 template <typename T>
@@ -39,14 +72,5 @@ template <typename T>
 inline void print_vector(const char* name, const std::vector<T>& output_data) {
   return print_vector(name, output_data.data(), output_data.size());
 }
-
-class NVTXScopedRange {
- public:
-  NVTXScopedRange(const std::string& name) : name(name) { nvtxRangePushA(name.c_str()); }
-  ~NVTXScopedRange() { nvtxRangePop(); }
-
- private:
-  std::string name;
-};
 
 #endif

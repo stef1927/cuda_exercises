@@ -65,7 +65,6 @@ int parse_args(int argc, char* argv[], Args& args) {
 // This runs in parallel on the CPU using the STL, which by default uses OpenMP as well, but we could make it run
 // on the GPU too by installing the HPC SDK and compiling with nvc++ and stdpar=gpu: nvc++ -std=c++20 -stdpar=gpu -O3
 std::vector<int> compact_stream_stl(const std::vector<int>& input_data, std::function<bool(int)> predicate) {
-  NVTXScopedRange fn("compact_stream_stl");
   Timer timer("compact_stream_stl");
   std::vector<int> input_data_prefix_sums(input_data.size());
 
@@ -91,8 +90,6 @@ std::vector<int> compact_stream_stl(const std::vector<int>& input_data, std::fun
 
 unsigned long long prefix_sum_with_pred_omp_chunk(const std::vector<int>& input_data, std::vector<int>& output_data,
                                                   std::function<bool(int)> predicate, int start_index, int end_index) {
-  NVTXScopedRange fn("prefix_sum_with_pred_omp_chunk");
-
   unsigned long long sum = 0;
   for (int i = start_index; i < end_index; i++) {
     if (predicate(input_data[i])) {
@@ -104,8 +101,6 @@ unsigned long long prefix_sum_with_pred_omp_chunk(const std::vector<int>& input_
 }
 
 void add_sum_of_previous_chunk(unsigned long long sum, std::vector<int>& output_data, int start_index, int end_index) {
-  NVTXScopedRange fn("add_sum_of_previous_chunk");
-
   for (int i = start_index; i < end_index; i++) {
     output_data[i] += sum;
   }
@@ -115,8 +110,6 @@ template <typename Predicate>
 void generate_output_data_omp_chunk(const std::vector<int>& input_data, std::vector<int>& output_data,
                                     std::vector<int>& output_data_indexes, int start_index, int end_index,
                                     Predicate predicate) {
-  NVTXScopedRange fn("generate_output_data_omp_chunk");
-
   for (int i = start_index; i < end_index; i++) {
     if (predicate(input_data[i])) {
       output_data[output_data_indexes[i] - 1] = input_data[i];
@@ -128,8 +121,6 @@ template <typename Predicate>
 void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector<int>& output_data,
                                  std::vector<int>& output_data_indexes, std::vector<unsigned long long>& sums,
                                  Predicate predicate) {
-  NVTXScopedRange fn("compact_stream_omp_parallel");
-
   int tid = omp_get_thread_num();
   int num_threads = omp_get_num_threads();
   int chunk_size = input_data.size() / num_threads;
@@ -146,7 +137,6 @@ void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector
 #pragma omp barrier
 #pragma omp master
   {
-    NVTXScopedRange fn("scan_sums");
     // scan the sum, sequential for now
     for (int i = 1; i < sums.size(); i++) {
       sums[i] += sums[i - 1];
@@ -165,7 +155,6 @@ void compact_stream_omp_parallel(const std::vector<int>& input_data, std::vector
 
 template <typename Predicate>
 std::vector<int> compact_stream_omp(const std::vector<int>& input_data, Predicate predicate) {
-  NVTXScopedRange fn("compact_stream_omp");
   Timer timer("compact_stream_omp");
   int num_threads = omp_get_num_procs();
   std::vector<int> output_data;
@@ -185,7 +174,6 @@ std::vector<int> compact_stream_omp(const std::vector<int>& input_data, Predicat
 
 
 int main(int argc, char* argv[]) {
-  NVTXScopedRange fn("main");
   Args args;
   if (parse_args(argc, argv, args) != 0) {
     return 1;

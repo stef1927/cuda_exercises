@@ -170,4 +170,13 @@ CudaUniquePtr<T> make_cuda_unique(size_t count = 1, bool managed = false) {
   return CudaUniquePtr<T>(ptr);
 }
 
+class NVTXScopedRange {
+ public:
+  NVTXScopedRange(const std::string& name) : name(name) { nvtxRangePushA(name.c_str()); }
+  ~NVTXScopedRange() { nvtxRangePop(); }
+
+ private:
+  std::string name;
+};
+
 #endif  // CUDA_EXERCISES_UTILS_H
