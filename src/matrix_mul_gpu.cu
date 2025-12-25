@@ -94,23 +94,24 @@ int parse_args(int argc, char* argv[], Args& args, cudaDeviceProp& deviceProp) {
 }
 
 
-template <Numeric T>
-__global__ void matrixMulNaiveKernel(T* A, T* B, T* C, int M, int K, int N) {
+template <Numeric T, typename LayoutA = RowMajor, typename LayoutB = RowMajor, typename LayoutC = RowMajor>
+__global__ void matrixMulNaiveKernel(MatrixView<T, LayoutA> A, MatrixView<T, LayoutB> B, MatrixView<T, LayoutC> C) {
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (row < M && col < N) {
+  if (row < A.height() && col < B.width()) {
     T sum = 0.0;
-    for (int kk = 0; kk < K; ++kk) {
-      sum += A[row * K + kk] * B[kk * N + col];
+    for (int kk = 0; kk < A.width(); ++kk) {
+      sum += A(row, kk) * B(kk, col);
     }
 
-    C[row * N + col] = sum;
+    C(row, col) = sum;
   }
 }
 
-template <Numeric T>
-__global__ void matrixMulTiledKernel(T* A, T* B, T* C, int M, int K, int N, int block_size) {
+template <Numeric T, typename LayoutA = RowMajor, typename LayoutB = RowMajor, typename LayoutC = RowMajor>
+__global__ void matrixMulTiledKernel(MatrixView<T, LayoutA> A, MatrixView<T, LayoutB> B, MatrixView<T, LayoutC> C,
+                                     int block_size) {
   const int blockRow = blockIdx.y;
   const int row = threadIdx.y;
   const int blockCol = blockIdx.x;
@@ -121,9 +122,9 @@ __global__ void matrixMulTiledKernel(T* A, T* B, T* C, int M, int K, int N, int 
   T* Bs = &smem[block_size * block_size];
 
   T sum = 0.0;
-  for (int b = 0; b < (K / block_size); ++b) {
-    As[row * block_size + col] = A[(blockRow * block_size + row) * K + (b * block_size + col)];
-    Bs[row * block_size + col] = B[(b * block_size + row) * K + (blockCol * block_size + col)];
+  for (int b = 0; b < (A.width() / block_size); ++b) {
+    As[row * block_size + col] = A(blockRow * block_size + row, b * block_size + col);
+    Bs[row * block_size + col] = B(b * block_size + row, blockCol * block_size + col);
 
     __syncthreads();
 
@@ -133,26 +134,26 @@ __global__ void matrixMulTiledKernel(T* A, T* B, T* C, int M, int K, int N, int 
 
     __syncthreads();
   }
-  C[(blockRow * block_size + row) * N + (blockCol * block_size + col)] = sum;
+  C(blockRow * block_size + row, blockCol * block_size + col) = sum;
 }
 
 template <Numeric T, typename LayoutA = RowMajor, typename LayoutB = RowMajor, typename LayoutC = RowMajor>
 void run_kernel(KernelType kernelType, Matrix<T, DeviceAsyncMemoryAllocator, LayoutA>& dA,
                 Matrix<T, DeviceAsyncMemoryAllocator, LayoutB>& dB, Matrix<T, DeviceAsyncMemoryAllocator, LayoutC>& dC,
                 Matrix<T, HostMemoryAllocator, LayoutC>& C, CudaStream& streamWrapper, Args& args) {
-  cudaStream_t stream = streamWrapper.stream;
-  CudaEventRecorder recorder = streamWrapper.record("matrix multiplication on GPU");
   int block_size = args.block_size;
-
   dim3 dimBlock(block_size, block_size);
   dim3 dimGrid((dC.width() + dimBlock.x - 1) / dimBlock.x, (dC.height() + dimBlock.y - 1) / dimBlock.y);
+  cudaStream_t stream = streamWrapper.stream;
 
+  CudaEventRecorder recorder = streamWrapper.record("matrix multiplication on GPU");
   if (kernelType == KernelType::Naive) {
-    matrixMulNaiveKernel<T><<<dimGrid, dimBlock, 0, stream>>>(dA.data, dB.data, dC.data, args.m, args.k, args.n);
+    matrixMulNaiveKernel<T, LayoutA, LayoutB, LayoutC>
+        <<<dimGrid, dimBlock, 0, stream>>>(dA.view(), dB.view(), dC.view());
   } else if (kernelType == KernelType::Tiled) {
     int shared_mem_size = 2 * block_size * block_size * sizeof(T);  // FIXME use tile size
-    matrixMulTiledKernel<T>
-        <<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA.data, dB.data, dC.data, args.m, args.k, args.n, block_size);
+    matrixMulTiledKernel<T, LayoutA, LayoutB, LayoutC>
+        <<<dimGrid, dimBlock, shared_mem_size, stream>>>(dA.view(), dB.view(), dC.view(), block_size);
   } else {
     throw std::runtime_error("Invalid kernel type");
   }
